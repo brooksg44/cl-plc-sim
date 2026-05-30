@@ -1,0 +1,36 @@
+# FASL and compiled output
+**/*.fasl
+**/*.fas
+**/*.lib
+**/*.so
+**/*.dll
+**/*.dx64fsl
+**/*.dx32fsl
+**/*.lx64fsl
+**/*.lx32fsl
+**/*.dfsl
+**/*.ufsl
+**/*.abcl
+**/*.cfsl
+**/*.nfasl
+**/*.mfasl
+**/*.ofasl
+**/*.wx64fsl
+
+# ASDF build cache
+/.cache/
+
+# Quicklisp local project leftovers
+quicklisp/
+
+# Editor and OS
+*~
+\#*\#
+.\#*
+.DS_Store
+*.swp
+*.swo
+
+# SLIME/SLY session files
+.slime-history.eld
+.sly-history.eld
