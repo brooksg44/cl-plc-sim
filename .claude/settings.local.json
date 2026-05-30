@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sbcl --version)",
+      "Read(//Users/brooksg44/quicklisp/**)",
+      "Bash(sbcl --script verify.lisp)",
+      "Bash(grep -v '^$')",
+      "Bash(sbcl --non-interactive --eval '\\(handler-case \\(progn \\(ql:quickload \"mcclim\" :silent t\\) \\(format t \"MCCLIM-AVAILABLE~%\"\\)\\) \\(error \\(e\\) \\(format t \"MCCLIM-LOAD-FAILED: ~A~%\" e\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(ql:update-dist \"quicklisp\" :prompt nil\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(handler-bind \\(\\(error \\(lambda \\(e\\) \\(format t \"~%>>> ERROR: ~A~%>>> TYPE: ~S~%\" e \\(type-of e\\)\\)\\)\\)\\) \\(ql:quickload \"mcclim\"\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(ql:update-dist \"ultralisp\" :prompt nil\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(format t \"before: ql=~A ul=~A~%\" \\(ql-dist:preference \\(ql-dist:dist \"quicklisp\"\\)\\) \\(ql-dist:preference \\(ql-dist:dist \"ultralisp\"\\)\\)\\)' --eval '\\(setf \\(ql-dist:preference \\(ql-dist:dist \"ultralisp\"\\)\\) -100\\)' --eval '\\(format t \"after:  ql=~A ul=~A~%\" \\(ql-dist:preference \\(ql-dist:dist \"quicklisp\"\\)\\) \\(ql-dist:preference \\(ql-dist:dist \"ultralisp\"\\)\\)\\)' --eval '\\(handler-case \\(progn \\(ql:quickload \"mcclim\" :silent t\\) \\(format t \"MCCLIM-OK~%\"\\)\\) \\(error \\(e\\) \\(format t \"FAIL: ~A~%\" e\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(dolist \\(d \\(list \"quicklisp\" \"ultralisp\"\\)\\) \\(let \\(\\(r \\(ql-dist:find-system-in-dist \"cl-unicode\" \\(ql-dist:dist d\\)\\)\\)\\) \\(format t \"~A: ~A~%\" d \\(and r \\(ql-dist:release r\\)\\)\\)\\)\\)' --eval '\\(let \\(\\(r \\(ql-dist:installed-release-system \"cl-unicode\"\\)\\)\\) \\(format t \"INSTALLED: ~A~%\" r\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(let \\(\\(rel \\(find \"edicl-cl-unicode-20231126182100\" \\(ql-dist:installed-releases \\(ql-dist:dist \"ultralisp\"\\)\\) :key \\(function ql-dist:name\\) :test \\(function string=\\)\\)\\)\\) \\(when rel \\(ql-dist:uninstall rel\\) \\(format t \"UNINSTALLED ~A~%\" rel\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(format t \"~%installed unicode releases:~%\"\\)' --eval '\\(dolist \\(d \\(ql-dist:enabled-dists\\)\\) \\(dolist \\(r \\(ql-dist:installed-releases d\\)\\) \\(when \\(search \"unicode\" \\(ql-dist:name r\\)\\) \\(format t \"  ~A \\(dist ~A\\)~%\" \\(ql-dist:name r\\) \\(ql-dist:name d\\)\\)\\)\\)\\)' --eval '\\(dolist \\(d \\(ql-dist:enabled-dists\\)\\) \\(dolist \\(r \\(ql-dist:installed-releases d\\)\\) \\(when \\(search \"unicode\" \\(ql-dist:name r\\)\\) \\(ql-dist:uninstall r\\) \\(format t \"  -> uninstalled ~A~%\" \\(ql-dist:name r\\)\\)\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(setf \\(ql-dist:preference \\(ql-dist:dist \"ultralisp\"\\)\\) -100\\)' --eval '\\(format t \"ul preference now: ~A~%\" \\(ql-dist:preference \\(ql-dist:dist \"ultralisp\"\\)\\)\\)' --eval '\\(handler-case \\(progn \\(ql:quickload \"mcclim\" :silent t\\) \\(format t \"~%>>> MCCLIM-LOADED-OK~%\"\\)\\) \\(error \\(e\\) \\(format t \"~%>>> FAIL: ~A~%\" e\\)\\)\\)' --eval '\\(let \\(\\(r \\(ql-dist:find-system \"cl-unicode\"\\)\\)\\) \\(format t \">>> cl-unicode resolves to: ~A~%\" \\(ql-dist:release r\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(sbcl --non-interactive --eval '\\(ql:quickload \"cl-ppcre\" :silent t\\)' --eval '\\(format t \"~%ppcre release: ~A~%\" \\(ql-dist:release \\(ql-dist:find-system \"cl-ppcre\"\\)\\)\\)' --eval '\\(dolist \\(s \\(list \"*STANDARD-OPTIMIZE-SETTINGS*\" \"WITH-REBINDING\"\\)\\) \\(multiple-value-bind \\(sym status\\) \\(find-symbol s :cl-ppcre\\) \\(format t \"  ~A -> ~A / ~A~%\" s sym status\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(timeout 540 sbcl --non-interactive --eval '\\(ql:quickload \"cl-ppcre\" :silent t\\)' --eval '\\(unless \\(find-symbol \"*STANDARD-OPTIMIZE-SETTINGS*\" :cl-ppcre\\) \\(let \\(\\(s \\(intern \"*STANDARD-OPTIMIZE-SETTINGS*\" :cl-ppcre\\)\\)\\) \\(proclaim \\(list \\(quote special\\) s\\)\\) \\(set s \\(quote \\(optimize speed \\(safety 0\\) \\(space 0\\) \\(debug 1\\) \\(compilation-speed 0\\)\\)\\)\\) \\(export s :cl-ppcre\\) \\(format t \">>> shim: interned ~S~%\" s\\)\\)\\)' --eval '\\(handler-case \\(progn \\(ql:quickload \"mcclim\" :silent t\\) \\(format t \"~%>>> MCCLIM-LOADED-OK~%\"\\)\\) \\(error \\(e\\) \\(format t \"~%>>> FAIL: ~A~%\" e\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(timeout 540 sbcl --non-interactive --load load-clim.lisp --eval '\\(format t \"~%>>> frame class present: ~A~%\" \\(and \\(find-class \\(read-from-string \"plc-sim-clim::ladder-frame\"\\) nil\\) t\\)\\)' --eval '\\(format t \">>> run fbound: ~A~%\" \\(fboundp \\(read-from-string \"plc-sim-clim:run\"\\)\\)\\)' --eval '\\(sb-ext:exit\\)')",
+      "Bash(brew --version)",
+      "Read(//Applications/Utilities/**)",
+      "Bash(brew info *)",
+      "Bash(brew install *)",
+      "Read(//opt/X11/bin/**)",
+      "Bash(DISPLAY=:0 /opt/X11/bin/xwd -id 0x600004 -out /tmp/ladder.xwd)",
+      "Read(//tmp/**)",
+      "Bash(magick /tmp/ladder.xwd /tmp/ladder.png)",
+      "Bash(convert /tmp/ladder.xwd /tmp/ladder.png)",
+      "Bash(kill 77791)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
