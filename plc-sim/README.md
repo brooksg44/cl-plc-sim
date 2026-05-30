@@ -1,3 +1,6 @@
+# Learning Common Lisp
+Using AI to learn Common Lisp with a topic I am real familiar with PLC Programming.
+This is very basic at the moment. Converts IL to LD and allows toggling Inputs by clicking on addresses. Then simulates a single scan. Pretty impressive for a first past.
 # plc-sim
 
 A scaffold for an **IEC 61131-3 simulator in Common Lisp** that parses
