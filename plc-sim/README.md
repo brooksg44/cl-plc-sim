@@ -38,8 +38,23 @@ src/
 tests/
   tests.lisp           FiveAM suite
 examples/
-  motor-seal-in.il     Seal-in latch, indicator, parenthesized branch, fault reset
+  motor-seal-in.il     Seal-in latch, indicator, parenthesized branch, fault RESET coil
+  motor-interlock.il   Same logic with the fault folded in as a series interlock
 ```
+
+### The two motor examples (seal-in vs interlock)
+
+`motor-seal-in.il` clears `Run` with a separate `RESET` coil in a *later* rung,
+while the indicator-lamp rung copies `Run` *earlier* in the same scan. So in a
+single scan the lamp reads the old `Run` value before the fault resets it — the
+lamp lags by one scan. A real PLC scans continuously and the lag is invisible;
+here the GUI's **Toggle** command settles to a quiescent state (see `STABILIZE`)
+so the display never freezes on that transient.
+
+`motor-interlock.il` folds the fault into the seal-in rung as a normally-closed
+series contact (`Run = (Start OR Run) AND NOT Stop AND NOT Fault`). `Run` then
+already accounts for the fault, so every rung that reads it — including the lamp
+— is consistent within a single scan, with no reset-coil lag.
 
 ## Status
 
@@ -51,7 +66,7 @@ examples/
 | Round-trip (IL → tree → IL → tree) | ✅ fixed-point verified |
 | McCLIM GUI | ✅ compiles & loads against McCLIM; a live window needs a display (XQuartz) |
 
-**30/30 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
+**42/42 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
 compiles and loads against McCLIM.** The GUI window itself was not *displayed*
 here because this machine has no X11 backend (XQuartz not installed, `DISPLAY`
 unset) — see "Launch the McCLIM GUI" below.
