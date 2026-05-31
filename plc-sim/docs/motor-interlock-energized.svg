@@ -1,0 +1,47 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='528' height='288'>
+  <rect width='100%' height='100%' fill='white'/>
+  <line x1='24' y1='24' x2='36' y2='24' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='60' y1='24' x2='72' y2='24' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='36' y1='12' x2='36' y2='36' stroke='#1a7f37' stroke-width='3'/>
+  <line x1='60' y1='12' x2='60' y2='36' stroke='#1a7f37' stroke-width='3'/>
+  <text x='48' y='6' text-anchor='middle' font-size='11' font-family='monospace'>%IX0.0</text>
+  <line x1='72' y1='24' x2='120' y2='24' stroke='#444' stroke-width='2'/>
+  <line x1='24' y1='72' x2='36' y2='72' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='60' y1='72' x2='72' y2='72' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='36' y1='60' x2='36' y2='84' stroke='#1a7f37' stroke-width='3'/>
+  <line x1='60' y1='60' x2='60' y2='84' stroke='#1a7f37' stroke-width='3'/>
+  <text x='48' y='54' text-anchor='middle' font-size='11' font-family='monospace'>%QX0.0</text>
+  <line x1='72' y1='72' x2='120' y2='72' stroke='#444' stroke-width='2'/>
+  <line x1='24' y1='24' x2='24' y2='72' stroke='#444' stroke-width='2'/>
+  <line x1='120' y1='24' x2='120' y2='72' stroke='#444' stroke-width='2'/>
+  <line x1='120' y1='24' x2='132' y2='24' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='156' y1='24' x2='168' y2='24' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='132' y1='12' x2='132' y2='36' stroke='#1a7f37' stroke-width='3'/>
+  <line x1='156' y1='12' x2='156' y2='36' stroke='#1a7f37' stroke-width='3'/>
+  <line x1='132' y1='36' x2='156' y2='12' stroke='#1a7f37' stroke-width='2'/>
+  <text x='144' y='6' text-anchor='middle' font-size='11' font-family='monospace'>%IX0.1</text>
+  <line x1='168' y1='24' x2='216' y2='24' stroke='#444' stroke-width='2'/>
+  <line x1='216' y1='24' x2='228' y2='24' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='252' y1='24' x2='264' y2='24' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='228' y1='12' x2='228' y2='36' stroke='#1a7f37' stroke-width='3'/>
+  <line x1='252' y1='12' x2='252' y2='36' stroke='#1a7f37' stroke-width='3'/>
+  <line x1='228' y1='36' x2='252' y2='12' stroke='#1a7f37' stroke-width='2'/>
+  <text x='240' y='6' text-anchor='middle' font-size='11' font-family='monospace'>%IX0.7</text>
+  <line x1='264' y1='24' x2='312' y2='24' stroke='#444' stroke-width='2'/>
+  <line x1='312' y1='24' x2='360' y2='24' stroke='#444' stroke-width='2'/>
+  <line x1='360' y1='24' x2='372' y2='24' stroke='#1a7f37' stroke-width='2'/>
+  <path d='M 372 12 A 10 12 0 0 0 372 36' fill='none' stroke='#1a7f37' stroke-width='3'/>
+  <path d='M 396 12 A 10 12 0 0 1 396 36' fill='none' stroke='#1a7f37' stroke-width='3'/>
+  <text x='384' y='6' text-anchor='middle' font-size='11' font-family='monospace'>%QX0.0 ( )</text>
+  <line x1='24' y1='168' x2='36' y2='168' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='60' y1='168' x2='72' y2='168' stroke='#1a7f37' stroke-width='2'/>
+  <line x1='36' y1='156' x2='36' y2='180' stroke='#1a7f37' stroke-width='3'/>
+  <line x1='60' y1='156' x2='60' y2='180' stroke='#1a7f37' stroke-width='3'/>
+  <text x='48' y='150' text-anchor='middle' font-size='11' font-family='monospace'>%QX0.0</text>
+  <line x1='72' y1='168' x2='120' y2='168' stroke='#444' stroke-width='2'/>
+  <line x1='120' y1='168' x2='168' y2='168' stroke='#444' stroke-width='2'/>
+  <line x1='168' y1='168' x2='180' y2='168' stroke='#1a7f37' stroke-width='2'/>
+  <path d='M 180 156 A 10 12 0 0 0 180 180' fill='none' stroke='#1a7f37' stroke-width='3'/>
+  <path d='M 204 156 A 10 12 0 0 1 204 180' fill='none' stroke='#1a7f37' stroke-width='3'/>
+  <text x='192' y='150' text-anchor='middle' font-size='11' font-family='monospace'>%QX0.1 ( )</text>
+</svg>

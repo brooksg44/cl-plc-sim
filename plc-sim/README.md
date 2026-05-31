@@ -56,6 +56,18 @@ series contact (`Run = (Start OR Run) AND NOT Stop AND NOT Fault`). `Run` then
 already accounts for the fault, so every rung that reads it — including the lamp
 — is consistent within a single scan, with no reset-coil lag.
 
+Rendered with `render-svg-to-file` (green = energized):
+
+| `motor-seal-in.il` — the one-scan transient | `motor-interlock.il` — energized |
+|---|---|
+| ![seal-in transient](docs/motor-seal-in-transient.png) | ![interlock energized](docs/motor-interlock-energized.png) |
+| Fault asserted (`%IX0.7` green): rung 4's `(R)` coil drove `Run` (`%QX0.0`) **off** — its coil and contacts are gray — yet the `%QX0.1` lamp is still **green**, because rung 2 copied `Run` earlier in the same scan. An impossible-looking state, frozen by single-step scanning. | Fault folded in as the inline `%IX0.7` NC contact, so `Run` and its lamp drop together in one scan. The stale-lamp state is simply unreachable. |
+
+For reference, the seal-in example in its normal energized steady state (Start
+held, no fault) looks correct too —
+[`docs/motor-seal-in-energized.png`](docs/motor-seal-in-energized.png) — the lag
+only appears on the scan where the fault first asserts.
+
 ## Status
 
 | Layer | State |
