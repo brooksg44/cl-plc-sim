@@ -115,3 +115,33 @@ existing regular file (not a directory)."
   (scan (sim-program sim) (sim-memory sim))
   (incf (sim-scan-count sim))
   sim)
+
+(defun %copy-bits (h)
+  "Shallow copy of a bits hash table, for change detection between scans."
+  (let ((c (make-hash-table :test 'equal :size (max 1 (hash-table-count h)))))
+    (maphash (lambda (k v) (setf (gethash k c) v)) h)
+    c))
+
+(defun %bits-equal (a b)
+  "True when bits tables A and B hold the same keys and values."
+  (and (= (hash-table-count a) (hash-table-count b))
+       (loop for k being the hash-keys of a using (hash-value v)
+             always (eq v (gethash k b)))))
+
+(defun stabilize (sim &key (max-scans 100))
+  "Run scans until SIM's memory stops changing (its quiescent state, the way a
+real continuously-scanning PLC would settle) or MAX-SCANS is reached.  Returns
+the number of scans run.
+
+A single scan can leave the display on a mid-cycle transient: a rung that reads
+an output earlier than a later rung writes it (e.g. a lamp following a coil that
+a downstream RESET clears in the same scan).  Settling to steady state hides
+that transient.  The cap bounds programs that never settle, such as a one-rung
+blinker (LDN Q / ST Q), which toggles every scan by design."
+  (let ((mem (sim-memory sim)))
+    (loop for n from 1 to max-scans
+          for before = (%copy-bits (memory-bits mem))
+          do (step-scan sim)
+          when (%bits-equal before (memory-bits mem))
+            do (return n)
+          finally (return max-scans))))

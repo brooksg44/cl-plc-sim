@@ -167,11 +167,13 @@ PANE's visible viewport — so the whole program shows without scrolling."
 
 (define-ladder-frame-command (com-toggle :name "Toggle")
     ((op 'operand :gesture :select))
-  "Toggle a bit, then re-scan so the display reflects it."
+  "Toggle a bit, then run to steady state so the display reflects it.
+Settling (rather than a single scan) avoids freezing on a mid-cycle transient,
+e.g. a lamp that follows a coil a later RESET rung clears in the same scan."
   (let* ((sim (frame-sim *application-frame*))
          (m (plc-sim:sim-memory sim)))
     (setf (plc-sim:mem-bit m op) (not (plc-sim:mem-bit m op)))
-    (plc-sim:step-scan sim)))
+    (plc-sim:stabilize sim)))
 
 (define-ladder-frame-command (com-scan :name "Scan")
     ()

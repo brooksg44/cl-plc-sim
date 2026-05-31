@@ -157,6 +157,68 @@ R Q"))
     (setf (mem-bit m "RST_BTN") t) (scan rst m)
     (is (eq nil (mem-bit m "Q")))))
 
+(test stabilize-settles-transient
+  ;; Rung order: lamp (rung 2) follows the Run coil, which the fault RESET
+  ;; (rung 4) clears in the same scan.  A single scan leaves the lamp on a
+  ;; one-scan-stale transient; stabilizing must settle both outputs to off.
+  (let ((sim (make-sim
+              (parse-il (merge-pathnames
+                         "examples/motor-seal-in.il"
+                         (asdf:system-source-directory "plc-sim"))))))
+    (let ((m (sim-memory sim)))
+      ;; Latch Run on, then assert the fault.
+      (setf (mem-bit m "IX0.0") t) (stabilize sim)
+      (is (eq t (mem-bit m "QX0.0")))
+      (is (eq t (mem-bit m "QX0.1")))
+      (setf (mem-bit m "IX0.0") nil)
+      (setf (mem-bit m "IX0.7") t)
+      (stabilize sim)
+      ;; After settling, Run is reset AND its lamp follows it off.
+      (is (eq nil (mem-bit m "QX0.0")))
+      (is (eq nil (mem-bit m "QX0.1"))))))
+
+(test stabilize-caps-oscillator
+  ;; A one-rung blinker (Q = NOT Q) never settles; stabilize must return the
+  ;; cap rather than loop forever.
+  (let ((sim (make-sim (parse-il-string "LDN Q
+ST Q"))))
+    (is (= 7 (stabilize sim :max-scans 7)))))
+
+;;; ---------------------------------------------------------------------------
+;;; Interlock example: fault folded into the seal-in, no scan-order lag
+;;; ---------------------------------------------------------------------------
+
+(defun %motor-interlock-program ()
+  (parse-il (merge-pathnames "examples/motor-interlock.il"
+                             (asdf:system-source-directory "plc-sim"))))
+
+(test interlock-folds-fault-into-rung-1
+  ;; The fault is an NC contact in series inside rung 1, not a separate RESET.
+  (let ((prog (%motor-interlock-program)))
+    (is (= 2 (length prog)))
+    (is (equal '(:coil :normal "%QX0.0"
+                 (:and (:or (:contact :no "%IX0.0") (:contact :no "%QX0.0"))
+                       (:contact :nc "%IX0.1")
+                       (:contact :nc "%IX0.7")))
+               (first prog)))))
+
+(test interlock-lamp-tracks-run-in-one-scan
+  ;; The whole point of the interlock form: a SINGLE scan (no stabilize) already
+  ;; leaves Run and its lamp consistent when the fault is asserted.
+  (let* ((sim (make-sim (%motor-interlock-program)))
+         (m (sim-memory sim)))
+    (setf (mem-bit m "IX0.0") t) (step-scan sim)   ; Start -> latch Run
+    (is (eq t (mem-bit m "QX0.0")))
+    (is (eq t (mem-bit m "QX0.1")))
+    (setf (mem-bit m "IX0.0") nil)
+    (setf (mem-bit m "IX0.7") t) (step-scan sim)   ; Fault -> drops both at once
+    (is (eq nil (mem-bit m "QX0.0")))
+    (is (eq nil (mem-bit m "QX0.1")))))
+
+(test interlock-round-trips
+  (let ((p1 (%motor-interlock-program)))
+    (is (equal p1 (parse-il-string (program->il p1))))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Layout
 ;;; ---------------------------------------------------------------------------
