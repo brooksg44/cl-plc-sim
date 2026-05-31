@@ -27,6 +27,7 @@ IL text ──parse──▶ Expression Tree (IR) ──┬──evaluate──�
 plc-sim.asd            Core system — zero external dependencies
 plc-sim-clim.asd       McCLIM front-end (depends on the core)
 verify.lisp            Dependency-free smoke test (sbcl --script verify.lisp)
+make-docs.lisp         Regenerates docs/ ladder images (sbcl --script make-docs.lisp)
 src/
   package.lisp         Package + exports
   ir.lisp              Expression-tree IR + smart constructors (series/parallel)
@@ -40,6 +41,7 @@ tests/
 examples/
   motor-seal-in.il     Seal-in latch, indicator, parenthesized branch, fault RESET coil
   motor-interlock.il   Same logic with the fault folded in as a series interlock
+docs/                  Rendered ladder images for the README (regen: make-docs.lisp)
 ```
 
 ### The two motor examples (seal-in vs interlock)
