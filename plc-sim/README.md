@@ -41,6 +41,8 @@ tests/
 examples/
   motor-seal-in.il     Seal-in latch, indicator, parenthesized branch, fault RESET coil
   motor-interlock.il   Same logic with the fault folded in as a series interlock
+  pump-on-delay.il     Timers: TON delayed pump start + TOF cooling-fan run-on
+  batch-counter.il     Counters: CTU part counter + CTD remaining-capacity, batch reset
 docs/                  Rendered ladder images for the README (regen: make-docs.lisp)
 ```
 
@@ -51,7 +53,9 @@ while the indicator-lamp rung copies `Run` *earlier* in the same scan. So in a
 single scan the lamp reads the old `Run` value before the fault resets it — the
 lamp lags by one scan. A real PLC scans continuously and the lag is invisible;
 here the GUI's **Toggle** command settles to a quiescent state (see `STABILIZE`)
-so the display never freezes on that transient.
+so the display never freezes on that transient. To *watch* the transient happen
+instead, use the GUI's **Step** command (or `step-rung` at the REPL), which
+executes one rung at a time — see "Single-stepping" below.
 
 `motor-interlock.il` folds the fault into the seal-in rung as a normally-closed
 series contact (`Run = (Start OR Run) AND NOT Stop AND NOT Fault`). `Run` then
@@ -76,11 +80,12 @@ only appears on the scan where the fault first asserts.
 |-------|-------|
 | IR, IL parser, fold, pretty-printer | ✅ implemented, tested |
 | Memory model, evaluator, scan cycle | ✅ implemented, tested |
+| Timers & counters (TON/TOF/TP, CTU/CTD) | ✅ implemented, tested (tick = one scan) |
 | Layout engine + SVG renderer | ✅ implemented, tested |
 | Round-trip (IL → tree → IL → tree) | ✅ fixed-point verified |
 | McCLIM GUI | ✅ compiles & loads against McCLIM; a live window needs a display (XQuartz) |
 
-**42/42 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
+**97/97 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
 compiles and loads against McCLIM.** The GUI window itself was not *displayed*
 here because this machine has no X11 backend (XQuartz not installed, `DISPLAY`
 unset) — see "Launch the McCLIM GUI" below.
@@ -151,19 +156,32 @@ ST Q")
 ### Launch the McCLIM GUI
 
 McCLIM's default backend is CLX (X11). On macOS install **XQuartz**
-(`brew install --cask xquartz`), start it (`open -a XQuartz`) so `$DISPLAY` is
-set, then:
+(`brew install --cask xquartz`), start it (`open -a XQuartz`), then:
 
 ```sh
 cd plc-sim
-sbcl --load load-clim.lisp
+DISPLAY=:0 sbcl --load load-clim.lisp
 ```
+
+> **Note (macOS):** XQuartz sets `$DISPLAY` to a launchd socket path like
+> `/var/run/com.apple.launchd.XXXX/org.xquartz:0`, which CLX can't parse — it
+> tries to resolve the whole path as a hostname and fails with
+> `SB-BSD-SOCKETS:HOST-NOT-FOUND-ERROR` ("Name service error in
+> \"getaddrinfo\""). Override it with `DISPLAY=:0`, which connects via the
+> standard Unix socket `/tmp/.X11-unix/X0` that XQuartz also listens on.
 ```lisp
 (plc-sim-clim:run :il #p"examples/motor-seal-in.il")
 ;; Click a contact's label or an I/O row to toggle it; the energized
-;; path recolours after each scan. Type "Scan" / "Toggle" / "Load" / "Quit"
-;; in the interactor pane.
+;; path recolours after each scan. Type "Scan" / "Step" / "Toggle" /
+;; "Load" / "Quit" in the interactor pane.
 ```
+
+**Single-stepping:** `Scan` runs one full scan cycle; `Step` executes a *single
+rung*. The arrowhead at the left rail points at the rung that will execute
+next — solid orange while a scan is mid-flight, hollow gray at a scan boundary —
+and the I/O panel shows `scan N (next rung i/m)`. While mid-scan, `Toggle` only
+flips the bit (no settling), so you can watch the new input propagate rung by
+rung; `Scan` finishes the remainder of the stepped cycle.
 
 `load-clim.lisp` applies the cl-ppcre shim (above), loads McCLIM and
 `plc-sim-clim`, and prints the launch line. Without a display you'll get a
@@ -183,15 +201,46 @@ Both Siemens STL and IEC textual mnemonics are accepted:
 | Close block   | `)` |
 | Store         | `ST`, `=`, `:=` |
 | Set / Reset   | `S` / `R`, `SET` / `RESET` |
+| Timers        | `TON` (on-delay), `TOF` (off-delay), `TP` (pulse) — `TON T1, 5` |
+| Counters      | `CTU` (count up), `CTD` (count down) — `CTU C1, 3` |
 
 Comments: `//…` and `;…` to end of line. Networks split on `NETWORK` markers or
 `label:` lines (and each store ends a rung).
 
+### Timers and counters
+
+A timer or counter terminates a rung like a coil and takes an instance name
+plus an integer preset (`TON T1, 5` — the comma is optional). **The time base
+is the scan: one scan = one tick** (the simulator has no real-time clock; the
+GUI's `Scan` command is the clock). The instance's *done bit* lives under its
+name, so plain contacts read it back: `LD T1`, `AND C1`, etc.
+
+| Instruction | Behaviour |
+|-------------|-----------|
+| `TON T1, n` | Done after the rung has been true for `n` consecutive scans; false rung resets it |
+| `TOF T1, n` | Done while the rung is true; after it goes false, holds until `n` scans have elapsed (Q drops on the scan where ET reaches the preset, mirroring TON) |
+| `TP T1, n`  | A rising edge fires the done bit for exactly `n` scans (not retriggerable) |
+| `CTU C1, n` | Counts rising edges of the rung; done once the count reaches `n` |
+| `CTD C1, n` | Loads `n`, counts rising edges *down*; done at zero |
+
+A `RESET` coil clears an instance: `R C1` zeroes a `CTU` (or timer) and
+*reloads* a `CTD` to its preset. Note that `STABILIZE` (the GUI's settle-on-
+toggle) compares only bits between scans, deliberately: it will not
+fast-forward a running timer to its preset — step `Scan` to advance time.
+
+Both example programs rendered mid-story (green = energized; boxes show
+`elapsed/preset`):
+
+| `pump-on-delay.il` — TON elapsed, pump + fan on | `batch-counter.il` — batch of 3 complete |
+|---|---|
+| ![pump on-delay running](docs/pump-on-delay-running.png) | ![batch counter complete](docs/batch-counter-complete.png) |
+| Start latched `%MX0.0`; `T1` has counted 5/5 so the pump runs, and the `TOF` follows the pump, holding the fan. Press Stop and keep scanning: the pump drops at once, the fan runs 8 more ticks. | Three sensor pulses counted: the `CTU` reads 3/3 (done) while the mirror-image `CTD` reads 0/3 (done). The reset button clears `C1` to 0 and reloads `C2` to 3. |
+
 ## Limitations & next steps (in priority order)
 
-1. **Timers / counters** (`TON`, `TOF`, `TP`, `CTU`, `CTD`) — add stateful
-   instruction nodes and a virtual scan clock. The `sim` object already carries
-   a scan counter to build on.
+1. ~~**Timers / counters** (`TON`, `TOF`, `TP`, `CTU`, `CTD`)~~ — **done**; see
+   "Timers and counters" above. The time base is the scan tick; a wall-clock
+   time base would ride on the threaded run mode (item 6).
 2. **Function blocks & non-boolean ops** (`L`/`T`, `ADD`, `CAL`, `JMP`) — the IR
    reserves a `(:fb …)` node and the layout/SVG already draw a box for it; the
    evaluator currently errors on `:fb` (intentional TODO).

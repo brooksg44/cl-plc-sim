@@ -64,6 +64,26 @@ stabilizing or running a single scan (STABILIZE-P nil, to capture a transient)."
 (render-state (%example "motor-interlock.il") (%doc-svg "motor-interlock-energized")
               :setup #'latch-run)
 
+;; 4) Timers: Start latched and 10 scans run, so the TON has elapsed (5/5, pump
+;;    on) and the TOF is following the pump (fan on).  Scans are stepped
+;;    explicitly because stabilize compares bits only -- it deliberately does
+;;    not fast-forward running timers.
+(render-state (%example "pump-on-delay.il") (%doc-svg "pump-on-delay-running")
+              :stabilize-p nil
+              :setup (lambda (sim)
+                       (setf (mem-bit (sim-memory sim) "IX0.0") t)
+                       (dotimes (i 9) (step-scan sim))))
+
+;; 5) Counters: three sensor pulses counted, batch complete -- CTU at 3/3 and
+;;    CTD at 0/3, gate and lamp on.
+(render-state (%example "batch-counter.il") (%doc-svg "batch-counter-complete")
+              :stabilize-p nil
+              :setup (lambda (sim)
+                       (let ((m (sim-memory sim)))
+                         (dotimes (i 3)
+                           (setf (mem-bit m "IX0.0") t) (step-scan sim)
+                           (setf (mem-bit m "IX0.0") nil) (step-scan sim)))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Optional: refresh PNGs via macOS qlmanage, if present.
 ;;; ---------------------------------------------------------------------------
@@ -101,7 +121,8 @@ names each output <input>.png, so we move <name>.svg.png into place afterward."
 (format t "~%Refreshing PNGs (macOS qlmanage) ...~%")
 (if (qlmanage-available-p)
     (qlmanage-pngs '("motor-seal-in-energized" "motor-seal-in-transient"
-                     "motor-interlock-energized"))
+                     "motor-interlock-energized"
+                     "pump-on-delay-running" "batch-counter-complete"))
     (format t "  qlmanage unavailable; SVGs updated, PNGs left as-is.~%"))
 
 (format t "~%Done.~%")

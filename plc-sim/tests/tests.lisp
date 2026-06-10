@@ -177,12 +177,197 @@ R Q"))
       (is (eq nil (mem-bit m "QX0.0")))
       (is (eq nil (mem-bit m "QX0.1"))))))
 
+(test step-rung-walks-one-rung-at-a-time
+  (let* ((sim (make-sim (parse-il-string "LD A
+ST X
+LD X
+ST Y")))
+         (m (sim-memory sim)))
+    (setf (mem-bit m "A") t)
+    (is (= 0 (step-rung sim)))
+    (is (eq t   (mem-bit m "X")))
+    (is (eq nil (mem-bit m "Y")))       ; rung 2 has not run yet
+    (is (= 1 (sim-next-rung sim)))
+    (is (= 0 (sim-scan-count sim)))     ; scan still mid-flight
+    (is (= 1 (step-rung sim)))
+    (is (eq t (mem-bit m "Y")))
+    (is (= 0 (sim-next-rung sim)))      ; wrapped: scan complete
+    (is (= 1 (sim-scan-count sim)))))
+
+(test step-scan-finishes-a-stepped-scan
+  (let ((sim (make-sim (parse-il-string "LD A
+ST X
+LD B
+ST Y
+LD C
+ST Z"))))
+    (step-rung sim)                     ; mid-scan after rung 1
+    (step-scan sim)                     ; finishes rungs 2-3, no second scan
+    (is (= 1 (sim-scan-count sim)))
+    (is (= 0 (sim-next-rung sim)))))
+
+(test step-scan-handles-empty-program
+  (is (= 1 (sim-scan-count (step-scan (make-sim))))))
+
+(test single-step-freezes-seal-in-transient
+  ;; Step through the fault scan of motor-seal-in one rung at a time: after
+  ;; rung 2 the lamp still mirrors the latched Run; only rung 4's RESET drops
+  ;; Run, leaving the lamp stale until the next scan -- visible mid-scan.
+  (let* ((sim (make-sim
+               (parse-il (merge-pathnames
+                          "examples/motor-seal-in.il"
+                          (asdf:system-source-directory "plc-sim")))))
+         (m (sim-memory sim)))
+    (setf (mem-bit m "IX0.0") t) (step-scan sim)   ; latch Run
+    (setf (mem-bit m "IX0.0") nil)
+    (setf (mem-bit m "IX0.7") t)                   ; assert the fault
+    (step-rung sim) (step-rung sim)                ; rungs 1-2 of the fault scan
+    (is (eq t (mem-bit m "QX0.0")))                ; Run still latched
+    (is (eq t (mem-bit m "QX0.1")))                ; lamp copied it
+    (step-rung sim) (step-rung sim)                ; rungs 3-4 (the RESET)
+    (is (eq nil (mem-bit m "QX0.0")))              ; Run dropped ...
+    (is (eq t   (mem-bit m "QX0.1")))              ; ... lamp stale: the transient
+    (is (= 2 (sim-scan-count sim)))))
+
 (test stabilize-caps-oscillator
   ;; A one-rung blinker (Q = NOT Q) never settles; stabilize must return the
   ;; cap rather than loop forever.
   (let ((sim (make-sim (parse-il-string "LDN Q
 ST Q"))))
     (is (= 7 (stabilize sim :max-scans 7)))))
+
+;;; ---------------------------------------------------------------------------
+;;; Timers and counters (time base: one scan = one tick)
+;;; ---------------------------------------------------------------------------
+
+(test parse-timer-counter
+  (is (equal '((:coil :ton "T1" (:contact :no "A") 5))
+             (parse-il-string "LD A
+TON T1, 5")))
+  ;; the comma is optional
+  (is (equal '((:coil :ctu "C1" (:contact :no "A") 3))
+             (parse-il-string "LD A
+CTU C1 3"))))
+
+(test timer-counter-round-trips
+  (let ((p1 (parse-il-string "LD A
+TON T1, 5
+LD T1
+ST Q
+LD B
+CTU C1, 3")))
+    (is (equal p1 (parse-il-string (program->il p1))))))
+
+(test stn-stores-negated-accumulator
+  (is (equal '((:coil :normal "Q" (:contact :nc "A")))
+             (parse-il-string "LD A
+STN Q"))))
+
+(test ton-delays-then-fires-then-resets
+  (let* ((sim (make-sim (parse-il-string "LD A
+TON T1, 3
+LD T1
+ST Q")))
+         (m (sim-memory sim)))
+    (setf (mem-bit m "A") t)
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; tick 1
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; tick 2
+    (step-scan sim) (is (eq t   (mem-bit m "Q")))   ; tick 3: done
+    (step-scan sim) (is (= 3 (mem-word m "T1")))    ; elapsed clamps at preset
+    (setf (mem-bit m "A") nil)                      ; input drops -> resets
+    (step-scan sim)
+    (is (eq nil (mem-bit m "Q")))
+    (is (= 0 (mem-word m "T1")))))
+
+(test tof-drops-when-elapsed-reaches-preset
+  ;; IEC 61131-3: Q=1 while IN=1; after IN drops, Q=0 once ET>=PT -- on the
+  ;; very scan ET reaches PT, mirroring TON's rise.
+  (let* ((sim (make-sim (parse-il-string "LD A
+TOF F1, 2
+LD F1
+ST Q")))
+         (m (sim-memory sim)))
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; never energized -> off
+    (setf (mem-bit m "A") t) (step-scan sim)
+    (is (eq t (mem-bit m "Q")))                     ; follows IN at once
+    (setf (mem-bit m "A") nil)
+    (step-scan sim) (is (eq t   (mem-bit m "Q")))   ; ET=1 < PT: holding
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; ET=2 = PT: Q drops
+    (is (= 2 (mem-word m "F1")))                    ; ET holds at PT
+    ;; IN returning true mid-hold keeps Q on and restarts the hold
+    (setf (mem-bit m "A") t) (step-scan sim)
+    (setf (mem-bit m "A") nil) (step-scan sim)
+    (is (eq t (mem-bit m "Q")))
+    (is (= 1 (mem-word m "F1")))))
+
+(test tp-pulses-for-preset-scans-not-retriggerable
+  (let* ((sim (make-sim (parse-il-string "LD A
+TP P1, 2")))
+         (m (sim-memory sim)))
+    (setf (mem-bit m "A") t)
+    (step-scan sim) (is (eq t (mem-bit m "P1")))    ; edge fires the pulse
+    (step-scan sim) (is (eq t (mem-bit m "P1")))    ; tick 2
+    (step-scan sim) (is (eq nil (mem-bit m "P1")))  ; pulse over
+    (step-scan sim) (is (eq nil (mem-bit m "P1")))  ; held IN: no retrigger
+    (setf (mem-bit m "A") nil) (step-scan sim)      ; release ...
+    (setf (mem-bit m "A") t)   (step-scan sim)      ; ... new edge refires
+    (is (eq t (mem-bit m "P1")))))
+
+(test ctu-counts-edges-and-resets
+  (let* ((sim (make-sim (parse-il-string "LD A
+CTU C1, 2
+LD B
+R C1")))
+         (m (sim-memory sim)))
+    (flet ((pulse ()
+             (setf (mem-bit m "A") t) (step-scan sim)
+             (setf (mem-bit m "A") nil) (step-scan sim)))
+      (pulse)
+      (is (= 1 (mem-word m "C1")))
+      (is (eq nil (mem-bit m "C1")))
+      ;; holding the input true across scans must NOT keep counting
+      (setf (mem-bit m "A") t) (step-scan sim) (step-scan sim)
+      (is (= 2 (mem-word m "C1")))
+      (is (eq t (mem-bit m "C1")))
+      ;; reset clears the count and the done bit
+      (setf (mem-bit m "A") nil)
+      (setf (mem-bit m "B") t) (step-scan sim)
+      (is (= 0 (mem-word m "C1")))
+      (is (eq nil (mem-bit m "C1"))))))
+
+(test ctd-loads-preset-counts-down-reloads-on-reset
+  (let* ((sim (make-sim (parse-il-string "LD A
+CTD C1, 2
+LD B
+R C1")))
+         (m (sim-memory sim)))
+    (step-scan sim)
+    (is (= 2 (mem-word m "C1")))          ; first execution loads the preset
+    (is (eq nil (mem-bit m "C1")))
+    (flet ((pulse ()
+             (setf (mem-bit m "A") t) (step-scan sim)
+             (setf (mem-bit m "A") nil) (step-scan sim)))
+      (pulse) (is (= 1 (mem-word m "C1")))
+      (pulse) (is (= 0 (mem-word m "C1")))
+      (is (eq t (mem-bit m "C1")))
+      ;; reset RELOADS a down counter (vs clearing a CTU)
+      (setf (mem-bit m "B") t) (step-scan sim)
+      (is (= 2 (mem-word m "C1")))
+      (is (eq nil (mem-bit m "C1"))))))
+
+(test timer-coil-prim-carries-preset
+  (let ((prims (layout-rung (first (parse-il-string "LD A
+TON T1, 5")))))
+    (is (equal '(:coil 3 0 :ton "T1" 5)
+               (find :coil prims :key #'first)))))
+
+(test example-pump-and-counter-files-parse
+  (dolist (name '("pump-on-delay.il" "batch-counter.il"))
+    (let ((prog (parse-il (merge-pathnames
+                           (format nil "examples/~A" name)
+                           (asdf:system-source-directory "plc-sim")))))
+      (is (plusp (length prog)))
+      (is (equal prog (parse-il-string (program->il prog)))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Interlock example: fault folded into the seal-in, no scan-order lag

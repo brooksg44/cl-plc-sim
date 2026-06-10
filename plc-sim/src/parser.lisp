@@ -9,6 +9,8 @@
 ;;;;   A( O( -> push the accumulator, start a fresh sub-expression
 ;;;;   )     -> pop and combine
 ;;;;   ST/S/R-> terminate the rung with a coil
+;;;;   TON/TOF/TP/CTU/CTD -> terminate the rung with a timer/counter box,
+;;;;          e.g. "TON T1, 5" (the preset is in scan ticks; see eval.lisp)
 ;;;;
 ;;;; Both Siemens STL mnemonics (A, AN, O, ON, =, A(, O()  and IEC textual IL
 ;;;; mnemonics (AND, ANDN, OR, ORN, ST, AND(, OR()  are accepted.
@@ -51,8 +53,16 @@
     (:st        "ST" "=" ":=")
     (:stn       "STN")
     (:s         "S" "SET")
-    (:r         "R" "RESET"))
+    (:r         "R" "RESET")
+    (:ton       "TON")
+    (:tof       "TOF")
+    (:tp        "TP")
+    (:ctu       "CTU")
+    (:ctd       "CTD"))
   "Mapping from canonical op keyword to accepted source spellings.")
+
+(defparameter *fb-kinds* '(:ton :tof :tp :ctu :ctd)
+  "Rung-terminating instructions that take an instance name AND a preset.")
 
 (defun %normalize-mnemonic (word)
   "Return the canonical keyword for the mnemonic WORD, or NIL if unknown."
@@ -86,7 +96,22 @@ the keyword :NETWORK so the caller can split rungs on it."
            (let ((kw (%normalize-mnemonic head)))
              (unless kw
                (error "Unknown IL mnemonic ~S in line: ~A" head line))
-             (list kw (second parts)))))))))
+             (if (member kw *fb-kinds*)
+                 (%parse-fb-args kw (rest parts) line)
+                 (list kw (second parts))))))))))
+
+(defun %parse-fb-args (kw args line)
+  "Parse a timer/counter line's arguments: \"T1, 5\" (comma optional) into
+(KW \"T1\" 5).  The preset is a plain integer, counted in scan ticks."
+  (let ((args (%split-ws (substitute #\Space #\, (format nil "~{~A~^ ~}" args)))))
+    (unless (= (length args) 2)
+      (error "~A needs an instance and a preset, e.g. \"~:*~A T1, 5\", in line: ~A"
+             (string kw) line))
+    (list kw (first args)
+          (handler-case (parse-integer (second args))
+            (error ()
+              (error "Preset must be an integer (scan ticks), got ~S in line: ~A"
+                     (second args) line))))))
 
 (defun tokenize (text)
   "Tokenize IL TEXT into a list of (mnemonic operand) ops, dropping blanks."
@@ -112,10 +137,15 @@ Maintains the IL accumulator ACC and a PAREN stack for A( / O( blocks.  A
 store (ST/S/R) emits a rung; the accumulator persists afterward, matching the
 PLC RLO semantics where a fresh LD is what restarts a rung."
   (let ((acc nil) (paren '()) (rungs '()))
-    (flet ((emit (kind operand)
-             (push (list :coil kind operand acc) rungs)))
+    (flet ((emit (kind operand &optional preset (expr acc))
+             ;; PRESET (timers/counters only) rides along as a 5th element so
+             ;; plain coils keep their original 4-element shape.
+             (push (if preset
+                       (list :coil kind operand expr preset)
+                       (list :coil kind operand expr))
+                   rungs)))
       (dolist (op ops (nreverse rungs))
-        (destructuring-bind (m &optional operand) op
+        (destructuring-bind (m &optional operand preset) op
           (ecase m
             (:network  (setf acc nil paren '())) ; defensive boundary reset
             (:ld   (setf acc (contact operand :no)))
@@ -139,9 +169,12 @@ PLC RLO semantics where a fresh LD is what restarts a rung."
                              (series saved acc)
                              (parallel saved acc)))))
             (:st  (emit :normal operand))
-            (:stn (let ((acc (negate acc))) (emit :normal operand)))
+            (:stn (emit :normal operand nil (negate acc)))
             (:s   (emit :set   operand))
-            (:r   (emit :reset operand))))))))
+            (:r   (emit :reset operand))
+            ;; timers/counters terminate a rung like a coil; their stateful
+            ;; semantics live in eval.lisp
+            ((:ton :tof :tp :ctu :ctd) (emit m operand preset))))))))
 
 (defun parse-il-string (text)
   "Parse IL TEXT into a program: a list of rung trees."
@@ -192,14 +225,21 @@ PLC RLO semantics where a fresh LD is what restarts a rung."
   (ecase kw
     (:ld "LD") (:ldn "LDN") (:and "AND") (:andn "ANDN")
     (:or "OR") (:orn "ORN") (:and-open "AND(") (:or-open "OR(")
-    (:close ")") (:st "ST") (:s "S") (:r "R") (:not "NOT")))
+    (:close ")") (:st "ST") (:s "S") (:r "R") (:not "NOT")
+    (:ton "TON") (:tof "TOF") (:tp "TP") (:ctu "CTU") (:ctd "CTD")))
 
 (defun rung->il (rung &key (stream nil))
   "Return (or print to STREAM) the IL text for one RUNG (:COIL node)."
-  (destructuring-bind (tag kind operand expr) rung
+  (destructuring-bind (tag kind operand expr &optional preset) rung
     (declare (ignore tag))
     (let* ((load-ops (%il-load expr))
-           (store (ecase kind (:normal :st) (:set :s) (:reset :r)))
+           (store-line
+             (if preset
+                 (format nil "~A ~A, ~D" (%mnemonic-string kind) operand preset)
+                 (format nil "~A ~A"
+                         (%mnemonic-string
+                          (ecase kind (:normal :st) (:set :s) (:reset :r)))
+                         operand)))
            (lines (append (mapcar (lambda (op)
                                     (destructuring-bind (m operand) op
                                       (if operand
@@ -207,8 +247,7 @@ PLC RLO semantics where a fresh LD is what restarts a rung."
                                                   (%mnemonic-string m) operand)
                                           (%mnemonic-string m))))
                                   load-ops)
-                          (list (format nil "~A ~A"
-                                        (%mnemonic-string store) operand)))))
+                          (list store-line))))
       (if stream
           (dolist (l lines) (write-line l stream))
           (format nil "~{~A~%~}" lines)))))

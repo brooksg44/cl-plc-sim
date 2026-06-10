@@ -40,7 +40,32 @@
     (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='11' font-family='monospace'>~A</text>~%"
             (+ cx (/ *cell* 2)) (- cy 18) operand)))
 
-(defun %svg-coil (out x y kind operand memory)
+(defun %svg-box-coil (out x y kind operand memory preset)
+  "A timer/counter rung terminator: a box showing the kind and CV/PT, with the
+instance name above.  Green once the instance's done bit is set."
+  (let* ((cx (%px x)) (cy (%px y))
+         (live (and memory (mem-bit memory operand)))
+         (color (if live "#1a7f37" "#444"))
+         (x0 (+ cx 5)) (x1 (+ cx *cell* -5))
+         (mid (+ cx (/ *cell* 2))))
+    (format out "  <line x1='~D' y1='~D' x2='~D' y2='~D' stroke='~A' stroke-width='2'/>~%"
+            cx cy x0 cy color)
+    (format out "  <rect x='~D' y='~D' width='~D' height='~D' fill='white' stroke='~A' stroke-width='2'/>~%"
+            x0 (- cy 14) (- x1 x0) 28 color)
+    (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
+            mid (- cy 3) (symbol-name kind))
+    (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
+            mid (+ cy 10)
+            (if memory
+                (format nil "~D/~D" (mem-word memory operand) preset)
+                (format nil "PT=~D" preset)))
+    (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='11' font-family='monospace'>~A</text>~%"
+            mid (- cy 18) operand)))
+
+(defun %svg-coil (out x y kind operand memory &optional preset)
+  (when preset                          ; timer/counter -> instruction box
+    (return-from %svg-coil
+      (%svg-box-coil out x y kind operand memory preset)))
   (let* ((cx (%px x)) (cy (%px y))
          (live (and memory (mem-bit memory operand)))
          (color (if live "#1a7f37" "#444"))
@@ -83,8 +108,8 @@ energized elements are drawn in green."
         (ecase (first p)
           (:contact (destructuring-bind (x y mode op) (rest p)
                       (%svg-contact stream x y mode op memory)))
-          (:coil (destructuring-bind (x y kind op) (rest p)
-                   (%svg-coil stream x y kind op memory)))
+          (:coil (destructuring-bind (x y kind op &optional preset) (rest p)
+                   (%svg-coil stream x y kind op memory preset)))
           (:wire (apply #'%svg-wire stream (rest p)))
           (:fb (apply #'%svg-fb stream (rest p)))))
       (format stream "</svg>~%"))))

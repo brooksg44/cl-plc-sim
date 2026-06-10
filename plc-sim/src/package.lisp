@@ -22,7 +22,8 @@
    #:make-memory #:memory #:mem-bit #:mem-word
    #:eval-expr #:execute-rung #:scan
    #:make-sim #:sim #:sim-memory #:sim-program #:sim-running-p #:sim-scan-count
-   #:load-il #:step-scan #:stabilize
+   #:sim-next-rung
+   #:load-il #:step-scan #:step-rung #:stabilize
    ;; --- Layout (layout.lisp) -------------------------------------------
    #:expr-size #:layout-rung #:layout-program
    ;; --- SVG renderer (svg.lisp) ----------------------------------------

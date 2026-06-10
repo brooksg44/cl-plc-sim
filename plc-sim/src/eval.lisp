@@ -64,14 +64,109 @@ An empty (NIL) expression evaluates to T (a closed power rail)."
 
 (defun execute-rung (rung memory)
   "Evaluate RUNG and apply its coil to MEMORY.  Returns the rung's result."
-  (destructuring-bind (tag kind operand expr) rung
+  (destructuring-bind (tag kind operand expr &optional preset) rung
     (declare (ignore tag))
     (let ((result (eval-expr expr memory)))
       (ecase kind
         (:normal (setf (mem-bit memory operand) result))
         (:set    (when result (setf (mem-bit memory operand) t)))
-        (:reset  (when result (setf (mem-bit memory operand) nil))))
+        (:reset  (when result (%reset-operand memory operand)))
+        (:ton (%eval-ton memory operand preset result))
+        (:tof (%eval-tof memory operand preset result))
+        (:tp  (%eval-tp  memory operand preset result))
+        (:ctu (%eval-ctu memory operand preset result))
+        (:ctd (%eval-ctd memory operand preset result)))
       result)))
+
+;;; ---------------------------------------------------------------------------
+;;; Timers and counters
+;;;
+;;; The time base is the SCAN: one scan = one tick, so a preset of 5 means "5
+;;; scans" (the sim has no real-time clock; the GUI's Scan command is the
+;;; clock).  Per instance (say T1) the state lives in ordinary memory:
+;;;
+;;;   bit  "T1"     the output / done bit Q  -- readable by plain contacts
+;;;   word "T1"     the current value CV (elapsed ticks, or the count)
+;;;   bit  "T1#P"   previous rung input, for edge detection (counters, TP)
+;;;   word "C1#PV"  recorded preset, so RESET can reload a CTD
+;;;
+;;; The #\# in internal keys cannot appear in an IL operand (it would not
+;;; survive tokenizing), so they can never collide; UIs filter them out.
+;;; ---------------------------------------------------------------------------
+
+(defun %aux (operand suffix)
+  "Internal state key for OPERAND, e.g. (%aux \"C1\" \"P\") => \"C1#P\"."
+  (format nil "~A#~A" (%canon operand) suffix))
+
+(defun %eval-ton (memory op pt in)
+  "On-delay timer: Q goes true once IN has held true for PT consecutive scans;
+IN going false resets elapsed and Q immediately."
+  (if in
+      (let ((cv (min pt (1+ (mem-word memory op)))))
+        (setf (mem-word memory op) cv
+              (mem-bit memory op) (>= cv pt)))
+      (setf (mem-word memory op) 0
+            (mem-bit memory op) nil)))
+
+(defun %eval-tof (memory op pt in)
+  "Off-delay timer: Q follows IN going true; after IN goes false Q holds until
+ET reaches PT, dropping on that very scan (Q=0 once ET>=PT, per IEC 61131-3 --
+the exact mirror of TON, whose Q rises on the scan where ET reaches PT)."
+  (cond (in (setf (mem-word memory op) 0
+                  (mem-bit memory op) t))
+        ((mem-bit memory op)
+         (let ((cv (min pt (1+ (mem-word memory op)))))
+           (setf (mem-word memory op) cv)
+           (when (>= cv pt)
+             (setf (mem-bit memory op) nil))))))
+
+(defun %eval-tp (memory op pt in)
+  "Pulse timer: a rising edge on IN fires Q for exactly PT scans.  The pulse is
+not retriggerable, and IN must drop before a new pulse can fire."
+  (let ((edge (and in (not (mem-bit memory (%aux op "P"))))))
+    (setf (mem-bit memory (%aux op "P")) in)
+    (cond ((mem-bit memory op)                    ; pulse in progress
+           (let ((cv (1+ (mem-word memory op))))
+             (setf (mem-word memory op) cv)
+             (when (>= cv pt)
+               (setf (mem-bit memory op) nil))))
+          (edge
+           (setf (mem-word memory op) 0
+                 (mem-bit memory op) (plusp pt))))))
+
+(defun %eval-ctu (memory op pv in)
+  "Up counter: count rising edges of IN; Q true once the count reaches PV.
+A RESET coil (R C1) clears the count."
+  (let ((edge (and in (not (mem-bit memory (%aux op "P"))))))
+    (setf (mem-bit memory (%aux op "P")) in)
+    (when edge
+      (setf (mem-word memory op) (1+ (mem-word memory op))))
+    (setf (mem-bit memory op) (>= (mem-word memory op) pv))))
+
+(defun %eval-ctd (memory op pv in)
+  "Down counter: starts at PV, counts rising edges of IN down; Q true at zero.
+A RESET coil (R C1) reloads PV (recorded under the #PV key)."
+  (let ((words (memory-words memory))
+        (pv-key (%aux op "PV")))
+    (unless (nth-value 1 (gethash pv-key words))  ; first execution: load PV
+      (setf (mem-word memory op) pv))
+    (setf (gethash pv-key words) pv)
+    (let ((edge (and in (not (mem-bit memory (%aux op "P"))))))
+      (setf (mem-bit memory (%aux op "P")) in)
+      (when edge
+        (setf (mem-word memory op) (max 0 (1- (mem-word memory op)))))
+      (setf (mem-bit memory op) (<= (mem-word memory op) 0)))))
+
+(defun %reset-operand (memory operand)
+  "RESET coil action: clear OPERAND's bit and restore its instance value --
+the recorded preset for a CTD, zero for timers/CTU.  Plain bits (no word
+entry) are untouched beyond the bit itself, as before."
+  (setf (mem-bit memory operand) nil)
+  (let ((words (memory-words memory)))
+    (multiple-value-bind (pv pv-p) (gethash (%aux operand "PV") words)
+      (cond (pv-p (setf (mem-word memory operand) pv))
+            ((nth-value 1 (gethash (%canon operand) words))
+             (setf (mem-word memory operand) 0))))))
 
 (defun scan (program memory)
   "Execute one scan: evaluate every rung of PROGRAM against MEMORY in order."
@@ -86,7 +181,10 @@ An empty (NIL) expression evaluates to T (a closed power rail)."
   (program nil :type list)
   (memory (make-memory) :type memory)
   (running-p nil :type boolean)
-  (scan-count 0 :type unsigned-byte))
+  (scan-count 0 :type unsigned-byte)
+  ;; Index of the NEXT rung to execute: 0 at a scan boundary, >0 while a scan
+  ;; is mid-flight under STEP-RUNG (single-stepping).
+  (next-rung 0 :type unsigned-byte))
 
 (defun make-sim (&optional program)
   (%make-sim :program program))
@@ -96,7 +194,8 @@ An empty (NIL) expression evaluates to T (a closed power rail)."
   (setf (sim-program sim)
         (if (%looks-like-file-p text-or-pathname)
             (parse-il text-or-pathname)
-            (parse-il-string text-or-pathname)))
+            (parse-il-string text-or-pathname))
+        (sim-next-rung sim) 0)          ; a new program starts at a scan boundary
   sim)
 
 (defun %looks-like-file-p (x)
@@ -110,10 +209,29 @@ existing regular file (not a directory)."
            (let ((p (probe-file x)))
              (and p (pathname-name p))))))   ; nil pathname-name => a directory
 
+(defun step-rung (sim)
+  "Single-step: execute ONE rung and advance SIM's position within the scan.
+Executing the last rung completes the scan (wrapping NEXT-RUNG to 0 and
+bumping the scan counter).  Returns the index of the rung just executed, or
+NIL when the program is empty."
+  (let ((program (sim-program sim)))
+    (when program
+      (let ((i (sim-next-rung sim)))
+        (execute-rung (nth i program) (sim-memory sim))
+        (if (< (1+ i) (length program))
+            (setf (sim-next-rung sim) (1+ i))
+            (setf (sim-next-rung sim) 0
+                  (sim-scan-count sim) (1+ (sim-scan-count sim))))
+        i))))
+
 (defun step-scan (sim)
-  "Run one scan of SIM and bump the scan counter."
-  (scan (sim-program sim) (sim-memory sim))
-  (incf (sim-scan-count sim))
+  "Run SIM to the end of the current scan and bump the scan counter: all rungs
+when at a scan boundary, or just the remaining rungs when mid-scan after
+STEP-RUNG."
+  (if (null (sim-program sim))
+      (incf (sim-scan-count sim))
+      (loop do (step-rung sim)
+            until (zerop (sim-next-rung sim))))
   sim)
 
 (defun %copy-bits (h)
@@ -137,7 +255,12 @@ A single scan can leave the display on a mid-cycle transient: a rung that reads
 an output earlier than a later rung writes it (e.g. a lamp following a coil that
 a downstream RESET clears in the same scan).  Settling to steady state hides
 that transient.  The cap bounds programs that never settle, such as a one-rung
-blinker (LDN Q / ST Q), which toggles every scan by design."
+blinker (LDN Q / ST Q), which toggles every scan by design.
+
+Only BITS are compared, deliberately: a running timer changes its word (elapsed
+ticks) every scan, and comparing words would make stabilize fast-forward every
+timer to its preset.  Instead a running timer counts a tick or two here and then
+advances one tick per explicit Scan -- the Scan command is the clock."
   (let ((mem (sim-memory sim)))
     (loop for n from 1 to max-scans
           for before = (%copy-bits (memory-bits mem))

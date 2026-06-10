@@ -12,7 +12,7 @@
 ;;;;
 ;;;; Emitted primitives (grid units; x grows right, y grows down):
 ;;;;   (:contact x y mode operand)
-;;;;   (:coil    x y kind operand)
+;;;;   (:coil    x y kind operand [preset])   preset rides along for timers/counters
 ;;;;   (:wire    x1 y1 x2 y2)        horizontal or vertical segment
 ;;;;   (:fb      x y w h name)
 
@@ -53,7 +53,7 @@
 (defun layout-rung (rung &key (row 0))
   "Return a list of drawing primitives for RUNG, with its top-left at ROW.
 The coil is placed one cell to the right of the contact network."
-  (destructuring-bind (tag kind operand expr) rung
+  (destructuring-bind (tag kind operand expr &optional preset) rung
     (declare (ignore tag))
     (let ((prims '()))
       (labels ((emit (p) (push p prims))
@@ -95,16 +95,19 @@ The coil is placed one cell to the right of the contact network."
           (declare (ignore h))
           (place expr 0 row w)
           (emit (list :wire w row (1+ w) row))      ; stub into the coil
-          (emit (list :coil (1+ w) row kind operand)))
+          (emit (list* :coil (1+ w) row kind operand
+                       (and preset (list preset)))))
         (nreverse prims)))))
 
 (defun layout-program (program &key (row-gap 1))
   "Lay out a whole PROGRAM, stacking rungs ROW-GAP cells apart.
-Returns (values PRIMITIVES TOTAL-ROWS)."
-  (let ((all '()) (row 0))
+Returns (values PRIMITIVES TOTAL-ROWS RUNG-ROWS), where RUNG-ROWS lists each
+rung's starting row -- for callers that point at a rung (single-stepping)."
+  (let ((all '()) (row 0) (starts '()))
     (dolist (rung program)
+      (push row starts)
       (multiple-value-bind (w h) (expr-size (fourth rung))
         (declare (ignore w))
         (dolist (p (layout-rung rung :row row)) (push p all))
         (incf row (+ (max h 1) row-gap))))
-    (values (nreverse all) row)))
+    (values (nreverse all) row (nreverse starts))))

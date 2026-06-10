@@ -17,7 +17,10 @@
 ;;;;
 ;;;; A rung (one ladder row) is:
 ;;;;
-;;;;   (:coil <kind> <operand> <expr>)   kind is :NORMAL, :SET, or :RESET
+;;;;   (:coil <kind> <operand> <expr> [<preset>])
+;;;;
+;;;; kind is :NORMAL, :SET, or :RESET for plain coils, or a timer/counter kind
+;;;; (:TON :TOF :TP :CTU :CTD) -- those carry the extra <preset> (scan ticks).
 
 (in-package #:plc-sim)
 
