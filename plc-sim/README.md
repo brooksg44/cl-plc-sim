@@ -52,10 +52,13 @@ docs/                  Rendered ladder images for the README (regen: make-docs.l
 while the indicator-lamp rung copies `Run` *earlier* in the same scan. So in a
 single scan the lamp reads the old `Run` value before the fault resets it — the
 lamp lags by one scan. A real PLC scans continuously and the lag is invisible;
-here the GUI's **Toggle** command settles to a quiescent state (see `STABILIZE`)
-so the display never freezes on that transient. To *watch* the transient happen
-instead, use the GUI's **Step** command (or `step-rung` at the REPL), which
-executes one rung at a time — see "Single-stepping" below.
+here the GUI's **Toggle** command runs a *single* scan, so the display freezes
+on exactly that impossible-looking state: toggle the fault on and `Run` reads
+off while its lamp is still lit. That's deliberate — press **Scan** to advance
+past the transient, or use **Step** (or `step-rung` at the REPL) to replay it
+one rung at a time and see precisely where the lamp goes stale — see
+"Single-stepping" below. (`plc-sim:stabilize` remains available at the REPL to
+jump straight to the quiescent state a continuously-scanning PLC would reach.)
 
 `motor-interlock.il` folds the fault into the seal-in rung as a normally-closed
 series contact (`Run = (Start OR Run) AND NOT Stop AND NOT Fault`). `Run` then
@@ -180,7 +183,7 @@ DISPLAY=:0 sbcl --load load-clim.lisp
 rung*. The arrowhead at the left rail points at the rung that will execute
 next — solid orange while a scan is mid-flight, hollow gray at a scan boundary —
 and the I/O panel shows `scan N (next rung i/m)`. While mid-scan, `Toggle` only
-flips the bit (no settling), so you can watch the new input propagate rung by
+flips the bit (no scan runs), so you can watch the new input propagate rung by
 rung; `Scan` finishes the remainder of the stepped cycle.
 
 `load-clim.lisp` applies the cl-ppcre shim (above), loads McCLIM and
@@ -224,9 +227,9 @@ name, so plain contacts read it back: `LD T1`, `AND C1`, etc.
 | `CTD C1, n` | Loads `n`, counts rising edges *down*; done at zero |
 
 A `RESET` coil clears an instance: `R C1` zeroes a `CTU` (or timer) and
-*reloads* a `CTD` to its preset. Note that `STABILIZE` (the GUI's settle-on-
-toggle) compares only bits between scans, deliberately: it will not
-fast-forward a running timer to its preset — step `Scan` to advance time.
+*reloads* a `CTD` to its preset. Note that `STABILIZE` (run-to-quiescence,
+available at the REPL) compares only bits between scans, deliberately: it will
+not fast-forward a running timer to its preset — step `Scan` to advance time.
 
 Both example programs rendered mid-story (green = energized; boxes show
 `elapsed/preset`):

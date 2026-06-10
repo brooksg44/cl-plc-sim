@@ -221,16 +221,18 @@ instance name (clickable, like a contact label) above."
 
 (define-ladder-frame-command (com-toggle :name "Toggle")
     ((op 'operand :gesture :select))
-  "Toggle a bit, then run to steady state so the display reflects it.
-Settling (rather than a single scan) avoids freezing on a mid-cycle transient,
-e.g. a lamp that follows a coil a later RESET rung clears in the same scan.
-EXCEPT while single-stepping (mid-scan): then only the bit flips, so the
-stepping session can observe how the new input propagates rung by rung."
+  "Toggle a bit, then run a single scan so the display reflects it.  The
+display can land on a mid-cycle transient (e.g. the stale lamp in
+motor-seal-in.il, where a later RESET rung clears a coil an earlier rung
+already copied) -- deliberately: Scan advances past it, Step replays it rung
+by rung, and (plc-sim:stabilize sim) at the REPL jumps to the quiescent
+state.  While single-stepping (mid-scan) only the bit flips, so the stepping
+session can observe how the new input propagates."
   (let* ((sim (frame-sim *application-frame*))
          (m (plc-sim:sim-memory sim)))
     (setf (plc-sim:mem-bit m op) (not (plc-sim:mem-bit m op)))
     (when (zerop (plc-sim:sim-next-rung sim))
-      (plc-sim:stabilize sim))))
+      (plc-sim:step-scan sim))))
 
 (define-ladder-frame-command (com-scan :name "Scan")
     ()
