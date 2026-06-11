@@ -171,22 +171,24 @@ contact label) above.  The box is TWO cells wide -- duration text like
 \"300ms/8s\" doesn't fit in one -- which fits because CONTENT-EXTENT already
 pads a spare cell past every coil."
   (let* ((cx (gx x)) (cy (gx y)) (ink (if live +forest-green+ +gray40+))
-         (q (round (* *cell* 1/4)))
+         ;; half-height 1/3 cell (vs a coil's 1/4) so the two text lines
+         ;; clear the borders
+         (qh (round (* *cell* 1/3)))
          (x0 (+ cx 4)) (x1 (+ cx (* 2 *cell*) -4))
          (mid (+ cx *cell*)))
     (draw-line* pane cx cy x0 cy :ink ink :line-thickness 2)
-    (draw-rectangle* pane x0 (- cy q) x1 (+ cy q)
+    (draw-rectangle* pane x0 (- cy qh) x1 (+ cy qh)
                      :filled nil :ink ink :line-thickness 2)
-    (draw-text* pane (symbol-name kind) mid (- cy 2)
+    (draw-text* pane (symbol-name kind) mid (- cy 3)
                 :align-x :center :text-size (lbl-size) :ink ink)
     (draw-text* pane (flet ((fmt (v) (if (plc-sim:timer-kind-p kind)
                                          (plc-sim:format-duration v)
                                          (princ-to-string v))))
                   (format nil "~A/~A" (fmt cv) (fmt preset)))
-                mid (+ cy q -3)
+                mid (+ cy qh -4)
                 :align-x :center :text-size (lbl-size) :ink ink)
     (with-output-as-presentation (pane op 'operand)
-      (draw-text* pane (princ-to-string op) x0 (- cy q 6)
+      (draw-text* pane (princ-to-string op) x0 (- cy qh 6)
                   :text-size (lbl-size)))))
 
 ;;; ---------------------------------------------------------------------------

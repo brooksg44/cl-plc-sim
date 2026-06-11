@@ -52,12 +52,13 @@ fits because the extent math already pads a spare cell past every coil."
          (mid (+ cx *cell*)))
     (format out "  <line x1='~D' y1='~D' x2='~D' y2='~D' stroke='~A' stroke-width='2'/>~%"
             cx cy x0 cy color)
+    ;; half-height 18 (vs a coil's 12) so the two text lines clear the borders
     (format out "  <rect x='~D' y='~D' width='~D' height='~D' fill='white' stroke='~A' stroke-width='2'/>~%"
-            x0 (- cy 14) (- x1 x0) 28 color)
+            x0 (- cy 18) (- x1 x0) 36 color)
     (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
-            mid (- cy 3) (symbol-name kind))
+            mid (- cy 5) (symbol-name kind))
     (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
-            mid (+ cy 10)
+            mid (+ cy 12)
             (flet ((fmt (v) (if (timer-kind-p kind)
                                 (format-duration v)
                                 (princ-to-string v))))
@@ -65,7 +66,7 @@ fits because the extent math already pads a spare cell past every coil."
                   (format nil "~A/~A" (fmt (mem-word memory operand)) (fmt preset))
                   (format nil "PT=~A" (fmt preset)))))
     (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='11' font-family='monospace'>~A</text>~%"
-            mid (- cy 18) operand)))
+            mid (- cy 22) operand)))
 
 (defun %svg-coil (out x y kind operand memory &optional preset)
   (when preset                          ; timer/counter -> instruction box
