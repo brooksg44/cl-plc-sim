@@ -45,7 +45,9 @@ rather than shrinking labels into each other.")
        :display-function 'display-io
        :scroll-bars t
        :text-style (make-text-style :fix :roman 12))
-   (interactor :interactor :height 80))  ; Scan / Step / Run / Stop / Toggle / Load / Quit
+   ;; Scan / Step / Run / Stop / Toggle / Load / Quit.  Kept short (and pinned
+   ;; with :max-height) so the ladder + I/O row above gets the vertical space.
+   (interactor :interactor :height 56 :max-height 56))
   (:layouts
    (default
     (vertically ()
