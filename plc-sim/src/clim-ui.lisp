@@ -167,11 +167,13 @@ scan boundary (where the next Step or Scan will start)."
 (defun draw-fb-box (pane x y kind op live cv preset)
   "A timer/counter rung terminator: a box showing the kind and CV/PT (durations
 for timers, counts for counters), with the instance name (clickable, like a
-contact label) above."
+contact label) above.  The box is TWO cells wide -- duration text like
+\"300ms/8s\" doesn't fit in one -- which fits because CONTENT-EXTENT already
+pads a spare cell past every coil."
   (let* ((cx (gx x)) (cy (gx y)) (ink (if live +forest-green+ +gray40+))
          (q (round (* *cell* 1/4)))
-         (x0 (+ cx 4)) (x1 (+ cx *cell* -4))
-         (mid (+ cx (round (* *cell* 1/2)))))
+         (x0 (+ cx 4)) (x1 (+ cx (* 2 *cell*) -4))
+         (mid (+ cx *cell*)))
     (draw-line* pane cx cy x0 cy :ink ink :line-thickness 2)
     (draw-rectangle* pane x0 (- cy q) x1 (+ cy q)
                      :filled nil :ink ink :line-thickness 2)

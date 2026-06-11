@@ -42,12 +42,14 @@
 
 (defun %svg-box-coil (out x y kind operand memory preset)
   "A timer/counter rung terminator: a box showing the kind and CV/PT, with the
-instance name above.  Green once the instance's done bit is set."
+instance name above.  Green once the instance's done bit is set.  The box is
+TWO cells wide -- duration text like \"300ms/8s\" doesn't fit in one -- which
+fits because the extent math already pads a spare cell past every coil."
   (let* ((cx (%px x)) (cy (%px y))
          (live (and memory (mem-bit memory operand)))
          (color (if live "#1a7f37" "#444"))
-         (x0 (+ cx 5)) (x1 (+ cx *cell* -5))
-         (mid (+ cx (/ *cell* 2))))
+         (x0 (+ cx 5)) (x1 (+ cx (* 2 *cell*) -5))
+         (mid (+ cx *cell*)))
     (format out "  <line x1='~D' y1='~D' x2='~D' y2='~D' stroke='~A' stroke-width='2'/>~%"
             cx cy x0 cy color)
     (format out "  <rect x='~D' y='~D' width='~D' height='~D' fill='white' stroke='~A' stroke-width='2'/>~%"
