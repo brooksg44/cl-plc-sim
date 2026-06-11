@@ -17,7 +17,11 @@
 
 (defstruct (memory (:constructor %make-memory))
   (bits  (make-hash-table :test 'equal) :type hash-table)
-  (words (make-hash-table :test 'equal) :type hash-table))
+  (words (make-hash-table :test 'equal) :type hash-table)
+  ;; Sim-time elapsed over the current scan, in milliseconds.  Set at each
+  ;; scan boundary by the sim's clock (see %BEGIN-SCAN); timers advance by it.
+  ;; Lives on MEMORY so EXECUTE-RUNG's (rung memory) signature stays put.
+  (dt-ms 1000 :type unsigned-byte))
 
 (defun make-memory () (%make-memory))
 
@@ -81,12 +85,17 @@ An empty (NIL) expression evaluates to T (a closed power rail)."
 ;;; ---------------------------------------------------------------------------
 ;;; Timers and counters
 ;;;
-;;; The time base is the SCAN: one scan = one tick, so a preset of 5 means "5
-;;; scans" (the sim has no real-time clock; the GUI's Scan command is the
-;;; clock).  Per instance (say T1) the state lives in ordinary memory:
+;;; The time base is SIM TIME in milliseconds.  The clock is sampled once per
+;;; scan (at the boundary; all rungs in a scan see the same timestamp, like a
+;;; real PLC), and timers advance by the scan's elapsed DT-MS.  Where that
+;;; time comes from is the sim's business: wall clock in free-run mode, or a
+;;; frozen virtual clock that each manual Scan advances by SCAN-PERIOD-MS
+;;; (default 1000 -- one Scan press = one second).  Counters are unaffected:
+;;; they count rising edges, not time.  Per instance (say T1) the state lives
+;;; in ordinary memory:
 ;;;
 ;;;   bit  "T1"     the output / done bit Q  -- readable by plain contacts
-;;;   word "T1"     the current value CV (elapsed ticks, or the count)
+;;;   word "T1"     the current value CV (elapsed ms, or the count)
 ;;;   bit  "T1#P"   previous rung input, for edge detection (counters, TP)
 ;;;   word "C1#PV"  recorded preset, so RESET can reload a CTD
 ;;;
@@ -99,10 +108,10 @@ An empty (NIL) expression evaluates to T (a closed power rail)."
   (format nil "~A#~A" (%canon operand) suffix))
 
 (defun %eval-ton (memory op pt in)
-  "On-delay timer: Q goes true once IN has held true for PT consecutive scans;
-IN going false resets elapsed and Q immediately."
+  "On-delay timer: Q goes true once IN has held true for PT milliseconds of
+sim time; IN going false resets elapsed and Q immediately."
   (if in
-      (let ((cv (min pt (1+ (mem-word memory op)))))
+      (let ((cv (min pt (+ (mem-word memory op) (memory-dt-ms memory)))))
         (setf (mem-word memory op) cv
               (mem-bit memory op) (>= cv pt)))
       (setf (mem-word memory op) 0
@@ -115,18 +124,18 @@ the exact mirror of TON, whose Q rises on the scan where ET reaches PT)."
   (cond (in (setf (mem-word memory op) 0
                   (mem-bit memory op) t))
         ((mem-bit memory op)
-         (let ((cv (min pt (1+ (mem-word memory op)))))
+         (let ((cv (min pt (+ (mem-word memory op) (memory-dt-ms memory)))))
            (setf (mem-word memory op) cv)
            (when (>= cv pt)
              (setf (mem-bit memory op) nil))))))
 
 (defun %eval-tp (memory op pt in)
-  "Pulse timer: a rising edge on IN fires Q for exactly PT scans.  The pulse is
-not retriggerable, and IN must drop before a new pulse can fire."
+  "Pulse timer: a rising edge on IN fires Q for PT milliseconds of sim time.
+The pulse is not retriggerable, and IN must drop before a new pulse can fire."
   (let ((edge (and in (not (mem-bit memory (%aux op "P"))))))
     (setf (mem-bit memory (%aux op "P")) in)
     (cond ((mem-bit memory op)                    ; pulse in progress
-           (let ((cv (1+ (mem-word memory op))))
+           (let ((cv (+ (mem-word memory op) (memory-dt-ms memory))))
              (setf (mem-word memory op) cv)
              (when (>= cv pt)
                (setf (mem-bit memory op) nil))))
@@ -184,7 +193,15 @@ entry) are untouched beyond the bit itself, as before."
   (scan-count 0 :type unsigned-byte)
   ;; Index of the NEXT rung to execute: 0 at a scan boundary, >0 while a scan
   ;; is mid-flight under STEP-RUNG (single-stepping).
-  (next-rung 0 :type unsigned-byte))
+  (next-rung 0 :type unsigned-byte)
+  ;; The sim clock, in milliseconds.  TIME-FN nil means a frozen virtual
+  ;; clock: each scan advances CLOCK-MS by SCAN-PERIOD-MS (one manual Scan =
+  ;; one second by default), so single-stepping stays deterministic.  In
+  ;; free-run mode TIME-FN is a function of no arguments returning wall
+  ;; milliseconds (see SIM-START-REALTIME) and each scan samples it.
+  (clock-ms 0 :type unsigned-byte)
+  (scan-period-ms 1000 :type unsigned-byte)
+  (time-fn nil :type (or null function)))
 
 (defun make-sim (&optional program)
   (%make-sim :program program))
@@ -209,6 +226,19 @@ existing regular file (not a directory)."
            (let ((p (probe-file x)))
              (and p (pathname-name p))))))   ; nil pathname-name => a directory
 
+(defun %begin-scan (sim)
+  "Advance SIM's clock at a scan boundary and record the elapsed DT-MS for the
+timers.  Time is sampled ONCE per scan, so every rung sees the same timestamp
+(like a real PLC).  Virtual clock (TIME-FN nil): advance by SCAN-PERIOD-MS.
+Realtime: sample TIME-FN; DT clamps at 0 so a clock going backwards (or a
+realtime->virtual switch) never yields negative elapsed time."
+  (let* ((now (if (sim-time-fn sim)
+                  (funcall (sim-time-fn sim))
+                  (+ (sim-clock-ms sim) (sim-scan-period-ms sim))))
+         (dt (max 0 (- now (sim-clock-ms sim)))))
+    (setf (sim-clock-ms sim) (max now (sim-clock-ms sim))
+          (memory-dt-ms (sim-memory sim)) dt)))
+
 (defun step-rung (sim)
   "Single-step: execute ONE rung and advance SIM's position within the scan.
 Executing the last rung completes the scan (wrapping NEXT-RUNG to 0 and
@@ -217,6 +247,7 @@ NIL when the program is empty."
   (let ((program (sim-program sim)))
     (when program
       (let ((i (sim-next-rung sim)))
+        (when (zerop i) (%begin-scan sim))    ; new scan: sample the clock
         (execute-rung (nth i program) (sim-memory sim))
         (if (< (1+ i) (length program))
             (setf (sim-next-rung sim) (1+ i))
@@ -232,6 +263,35 @@ STEP-RUNG."
       (incf (sim-scan-count sim))
       (loop do (step-rung sim)
             until (zerop (sim-next-rung sim))))
+  sim)
+
+;;; ---------------------------------------------------------------------------
+;;; Realtime mode (free run)
+;;;
+;;; The core stays thread-free: these just switch the sim's clock source and
+;;; the RUNNING-P flag.  A front-end (e.g. plc-sim-clim) owns the actual scan
+;;; loop / thread and keeps scanning while RUNNING-P holds.
+;;; ---------------------------------------------------------------------------
+
+(defun wall-time-ms ()
+  "Wall-clock milliseconds from a monotonic base (GET-INTERNAL-REAL-TIME)."
+  (values (round (* 1000 (get-internal-real-time))
+                 internal-time-units-per-second)))
+
+(defun sim-start-realtime (sim &optional (time-fn #'wall-time-ms))
+  "Switch SIM's clock to realtime (TIME-FN, default the wall clock) and raise
+RUNNING-P.  CLOCK-MS syncs to TIME-FN's current value so the first scan sees a
+near-zero DT rather than the whole gap since the epoch."
+  (setf (sim-time-fn sim) time-fn
+        (sim-clock-ms sim) (funcall time-fn)
+        (sim-running-p sim) t)
+  sim)
+
+(defun sim-stop-realtime (sim)
+  "Drop RUNNING-P and return SIM to its frozen virtual clock.  CLOCK-MS keeps
+its value, so subsequent manual scans continue from where realtime left off."
+  (setf (sim-running-p sim) nil
+        (sim-time-fn sim) nil)
   sim)
 
 (defun %copy-bits (h)
@@ -258,9 +318,10 @@ that transient.  The cap bounds programs that never settle, such as a one-rung
 blinker (LDN Q / ST Q), which toggles every scan by design.
 
 Only BITS are compared, deliberately: a running timer changes its word (elapsed
-ticks) every scan, and comparing words would make stabilize fast-forward every
-timer to its preset.  Instead a running timer counts a tick or two here and then
-advances one tick per explicit Scan -- the Scan command is the clock."
+ms) every scan, and comparing words would make stabilize fast-forward every
+timer to its preset.  Instead a running timer gains a scan-period or two here
+and then advances one scan-period per explicit Scan (or follows the wall clock
+in free-run mode)."
   (let ((mem (sim-memory sim)))
     (loop for n from 1 to max-scans
           for before = (%copy-bits (memory-bits mem))

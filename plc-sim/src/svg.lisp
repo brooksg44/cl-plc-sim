@@ -56,9 +56,12 @@ instance name above.  Green once the instance's done bit is set."
             mid (- cy 3) (symbol-name kind))
     (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
             mid (+ cy 10)
-            (if memory
-                (format nil "~D/~D" (mem-word memory operand) preset)
-                (format nil "PT=~D" preset)))
+            (flet ((fmt (v) (if (timer-kind-p kind)
+                                (format-duration v)
+                                (princ-to-string v))))
+              (if memory
+                  (format nil "~A/~A" (fmt (mem-word memory operand)) (fmt preset))
+                  (format nil "PT=~A" (fmt preset)))))
     (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='11' font-family='monospace'>~A</text>~%"
             mid (- cy 18) operand)))
 

@@ -10,7 +10,9 @@
 ;;;;   )     -> pop and combine
 ;;;;   ST/S/R-> terminate the rung with a coil
 ;;;;   TON/TOF/TP/CTU/CTD -> terminate the rung with a timer/counter box,
-;;;;          e.g. "TON T1, 5" (the preset is in scan ticks; see eval.lisp)
+;;;;          e.g. "TON T1, T#5s".  Timer presets are IEC TIME literals
+;;;;          (T#5s, T#500ms, T#1m30s) or bare integers meaning milliseconds;
+;;;;          counter presets are plain integer counts (see eval.lisp)
 ;;;;
 ;;;; Both Siemens STL mnemonics (A, AN, O, ON, =, A(, O()  and IEC textual IL
 ;;;; mnemonics (AND, ANDN, OR, ORN, ST, AND(, OR()  are accepted.
@@ -101,17 +103,88 @@ the keyword :NETWORK so the caller can split rungs on it."
                  (list kw (second parts))))))))))
 
 (defun %parse-fb-args (kw args line)
-  "Parse a timer/counter line's arguments: \"T1, 5\" (comma optional) into
-(KW \"T1\" 5).  The preset is a plain integer, counted in scan ticks."
+  "Parse a timer/counter line's arguments: \"T1, T#5s\" (comma optional) into
+(KW \"T1\" 5000).  A timer preset is an IEC TIME literal or a bare integer
+meaning milliseconds; a counter preset is a plain integer count."
   (let ((args (%split-ws (substitute #\Space #\, (format nil "~{~A~^ ~}" args)))))
     (unless (= (length args) 2)
-      (error "~A needs an instance and a preset, e.g. \"~:*~A T1, 5\", in line: ~A"
-             (string kw) line))
-    (list kw (first args)
-          (handler-case (parse-integer (second args))
-            (error ()
-              (error "Preset must be an integer (scan ticks), got ~S in line: ~A"
-                     (second args) line))))))
+      (error "~A needs an instance and a preset, e.g. \"~:*~A T1, ~A\", in line: ~A"
+             (string kw) (if (timer-kind-p kw) "T#5s" "5") line))
+    (destructuring-bind (instance preset) args
+      (list kw instance
+            (cond ((and (timer-kind-p kw) (%parse-time-literal preset)))
+                  (t (handler-case (parse-integer preset)
+                       (error ()
+                         (error "Preset must be ~A, got ~S in line: ~A"
+                                (if (timer-kind-p kw)
+                                    "a TIME literal (T#5s) or integer milliseconds"
+                                    "an integer count")
+                                preset line)))))))))
+
+;;; ---------------------------------------------------------------------------
+;;; IEC TIME literals (timer presets): T#5s, T#500ms, T#1m30s, T#1.5s
+;;; ---------------------------------------------------------------------------
+
+(defparameter *time-units*
+  ;; longest spelling first so "MS" is not consumed as "M" + garbage
+  '(("MS" . 1) ("S" . 1000) ("M" . 60000) ("H" . 3600000) ("D" . 86400000))
+  "TIME-literal unit suffixes and their value in milliseconds.")
+
+(defun %parse-decimal (string)
+  "Parse \"5\" or \"1.5\" into an exact rational, or NIL if malformed."
+  (let ((dot (position #\. string)))
+    (handler-case
+        (if dot
+            (let ((frac (subseq string (1+ dot))))
+              (+ (if (zerop dot) 0 (parse-integer string :end dot))
+                 (if (zerop (length frac))
+                     0
+                     (/ (parse-integer frac) (expt 10 (length frac))))))
+            (parse-integer string))
+      (error () nil))))
+
+(defun %parse-time-literal (string)
+  "Parse an IEC TIME literal -- \"T#5s\", \"TIME#1m30s\", \"T#1.5s\", with
+optional underscore separators -- into total milliseconds (rounded).  Returns
+NIL when STRING does not start with T#/TIME#; signals an error on a malformed
+body (so \"T#5x\" is rejected rather than silently treated as an operand)."
+  (let* ((up (remove #\_ (string-upcase string)))
+         (body (cond ((and (> (length up) 5) (string= "TIME#" up :end2 5))
+                      (subseq up 5))
+                     ((and (> (length up) 2) (string= "T#" up :end2 2))
+                      (subseq up 2))
+                     (t (return-from %parse-time-literal nil)))))
+    (loop with i = 0 and len = (length body) and total = 0
+          while (< i len)
+          do (let* ((num-end (or (position-if #'alpha-char-p body :start i) len))
+                    (unit-end (or (position-if-not #'alpha-char-p body
+                                                   :start num-end)
+                                  len))
+                    (value (%parse-decimal (subseq body i num-end)))
+                    (factor (cdr (assoc (subseq body num-end unit-end)
+                                        *time-units* :test #'string=))))
+               (unless (and value factor)
+                 (error "Malformed TIME literal ~S" string))
+               (incf total (round (* value factor)))
+               (setf i unit-end))
+          finally (return total))))
+
+(defun format-time-literal (ms)
+  "Canonical TIME literal for MS milliseconds, using the largest unit that
+divides evenly: 5000 -> \"T#5s\", 90000 -> \"T#90s\", 120000 -> \"T#2m\",
+500 -> \"T#500ms\".  The pretty-printer's inverse of %PARSE-TIME-LITERAL."
+  (loop for (unit . factor) in '(("d" . 86400000) ("h" . 3600000)
+                                 ("m" . 60000) ("s" . 1000))
+        when (and (plusp ms) (zerop (mod ms factor)))
+          do (return (format nil "T#~D~A" (floor ms factor) unit))
+        finally (return (format nil "T#~Dms" ms))))
+
+(defun format-duration (ms)
+  "Compact human form of MS milliseconds for instruction-box display:
+300 -> \"300ms\", 5000 -> \"5s\", 1500 -> \"1.5s\"."
+  (cond ((< ms 1000) (format nil "~Dms" ms))
+        ((zerop (mod ms 1000)) (format nil "~Ds" (floor ms 1000)))
+        (t (format nil "~,1Fs" (/ ms 1000.0)))))
 
 (defun tokenize (text)
   "Tokenize IL TEXT into a list of (mnemonic operand) ops, dropping blanks."
@@ -235,7 +308,10 @@ PLC RLO semantics where a fresh LD is what restarts a rung."
     (let* ((load-ops (%il-load expr))
            (store-line
              (if preset
-                 (format nil "~A ~A, ~D" (%mnemonic-string kind) operand preset)
+                 (format nil "~A ~A, ~A" (%mnemonic-string kind) operand
+                         (if (timer-kind-p kind)
+                             (format-time-literal preset)
+                             preset))
                  (format nil "~A ~A"
                          (%mnemonic-string
                           (ecase kind (:normal :st) (:set :s) (:reset :r)))

@@ -45,7 +45,7 @@ rather than shrinking labels into each other.")
        :display-function 'display-io
        :scroll-bars t
        :text-style (make-text-style :fix :roman 12))
-   (interactor :interactor :height 80))  ; Scan / Step / Toggle / Load / Quit
+   (interactor :interactor :height 80))  ; Scan / Step / Run / Stop / Toggle / Load / Quit
   (:layouts
    (default
     (vertically ()
@@ -165,8 +165,9 @@ scan boundary (where the next Step or Scan will start)."
                 x0 (- cy q 6) :text-size (lbl-size))))
 
 (defun draw-fb-box (pane x y kind op live cv preset)
-  "A timer/counter rung terminator: a box showing the kind and CV/PT, with the
-instance name (clickable, like a contact label) above."
+  "A timer/counter rung terminator: a box showing the kind and CV/PT (durations
+for timers, counts for counters), with the instance name (clickable, like a
+contact label) above."
   (let* ((cx (gx x)) (cy (gx y)) (ink (if live +forest-green+ +gray40+))
          (q (round (* *cell* 1/4)))
          (x0 (+ cx 4)) (x1 (+ cx *cell* -4))
@@ -176,7 +177,11 @@ instance name (clickable, like a contact label) above."
                      :filled nil :ink ink :line-thickness 2)
     (draw-text* pane (symbol-name kind) mid (- cy 2)
                 :align-x :center :text-size (lbl-size) :ink ink)
-    (draw-text* pane (format nil "~D/~D" cv preset) mid (+ cy q -3)
+    (draw-text* pane (flet ((fmt (v) (if (plc-sim:timer-kind-p kind)
+                                         (plc-sim:format-duration v)
+                                         (princ-to-string v))))
+                  (format nil "~A/~A" (fmt cv) (fmt preset)))
+                mid (+ cy q -3)
                 :align-x :center :text-size (lbl-size) :ink ink)
     (with-output-as-presentation (pane op 'operand)
       (draw-text* pane (princ-to-string op) x0 (- cy q 6)
@@ -200,8 +205,10 @@ instance name (clickable, like a contact label) above."
                             unless (find #\# k) collect (cons k v))
                       #'string< :key #'car)))
     (let ((sim (frame-sim frame)))
-      (format pane "scan ~D~@[ (next rung ~D/~D)~]~2%"
+      (format pane "~A  scan ~D  t=~A~@[ (next rung ~D/~D)~]~2%"
+              (if (plc-sim:sim-running-p sim) "RUN" "STOP")
               (plc-sim:sim-scan-count sim)
+              (plc-sim:format-duration (plc-sim:sim-clock-ms sim))
               (let ((next (plc-sim:sim-next-rung sim)))
                 (and (plusp next) (1+ next)))
               (length (plc-sim:sim-program sim))))
@@ -226,29 +233,79 @@ display can land on a mid-cycle transient (e.g. the stale lamp in
 motor-seal-in.il, where a later RESET rung clears a coil an earlier rung
 already copied) -- deliberately: Scan advances past it, Step replays it rung
 by rung, and (plc-sim:stabilize sim) at the REPL jumps to the quiescent
-state.  While single-stepping (mid-scan) only the bit flips, so the stepping
-session can observe how the new input propagates."
+state.  While single-stepping (mid-scan) or free-running, only the bit
+flips: a stepping session can observe how the new input propagates, and a
+free-running sim picks it up on its next scan."
   (let* ((sim (frame-sim *application-frame*))
          (m (plc-sim:sim-memory sim)))
     (setf (plc-sim:mem-bit m op) (not (plc-sim:mem-bit m op)))
-    (when (zerop (plc-sim:sim-next-rung sim))
+    (when (and (not (plc-sim:sim-running-p sim))
+               (zerop (plc-sim:sim-next-rung sim)))
       (plc-sim:step-scan sim))))
 
 (define-ladder-frame-command (com-scan :name "Scan")
     ()
-  "Run to the end of the current scan cycle (finishing a stepped scan)."
-  (plc-sim:step-scan (frame-sim *application-frame*)))
+  "Run to the end of the current scan cycle (finishing a stepped scan),
+pausing free-run mode first.  Each manual scan advances the virtual clock by
+the sim's scan period (default 1 second), so timers stay steppable."
+  (let ((sim (frame-sim *application-frame*)))
+    (plc-sim:sim-stop-realtime sim)
+    (plc-sim:step-scan sim)))
 
 (define-ladder-frame-command (com-step :name "Step")
     ()
-  "Single-step: execute ONE rung.  The arrowhead at the left rail points at the
-rung that will execute next; Scan finishes the rest of the cycle."
-  (plc-sim:step-rung (frame-sim *application-frame*)))
+  "Single-step: execute ONE rung, pausing free-run mode first.  The arrowhead
+at the left rail points at the rung that will execute next; Scan finishes the
+rest of the cycle."
+  (let ((sim (frame-sim *application-frame*)))
+    (plc-sim:sim-stop-realtime sim)
+    (plc-sim:step-rung sim)))
+
+(defparameter *run-tick-seconds* 0.1
+  "Free-run scan rate: the ticker thread requests a scan this often.  Timer
+accuracy does not depend on it -- each scan samples the wall clock.")
+
+(define-ladder-frame-command (com-run :name "Run")
+    ()
+  "Free run: scan continuously, timers following the wall clock, until Stop.
+Toggle still works while running; Scan/Step pause the run first.
+
+The ticker thread never touches the sim itself: it only enqueues COM-TICK via
+EXECUTE-FRAME-COMMAND (safe from any thread), so all sim mutation happens in
+the frame's own command loop and no locking is needed."
+  (let* ((frame *application-frame*)
+         (sim (frame-sim frame)))
+    (unless (plc-sim:sim-running-p sim)
+      (plc-sim:sim-start-realtime sim)
+      (bt:make-thread
+       (lambda ()
+         (loop while (plc-sim:sim-running-p sim)
+               do (sleep *run-tick-seconds*)
+                  (execute-frame-command frame '(com-tick))))
+       :name "plc-sim scan ticker"))))
+
+(define-ladder-frame-command (com-tick)   ; no :name -- not user-typeable
+    ()
+  "One free-running scan, enqueued by the ticker thread.  Redisplays
+explicitly: commands arriving via the event queue bypass the command loop's
+own redisplay pass."
+  (let ((sim (frame-sim *application-frame*)))
+    (when (plc-sim:sim-running-p sim)
+      (plc-sim:step-scan sim)
+      (redisplay-frame-panes *application-frame*))))
+
+(define-ladder-frame-command (com-stop :name "Stop")
+    ()
+  "Pause free-run mode.  The clock freezes where it is; Scan/Step advance it
+manually from there."
+  (plc-sim:sim-stop-realtime (frame-sim *application-frame*)))
 
 (define-ladder-frame-command (com-load :name "Load")
     ((path 'pathname))
-  "Load an IL file into the running simulator."
-  (plc-sim:load-il (frame-sim *application-frame*) path))
+  "Load an IL file into the simulator, pausing free-run mode first."
+  (let ((sim (frame-sim *application-frame*)))
+    (plc-sim:sim-stop-realtime sim)
+    (plc-sim:load-il sim path)))
 
 (define-ladder-frame-command (com-quit :name "Quit") ()
   (frame-exit *application-frame*))

@@ -55,9 +55,10 @@ Node forms (defined in `src/ir.lisp` header comments): `(:contact :no|:nc op)`, 
 ### Simulation model (eval.lisp)
 
 - Memory is two name→value hash tables (bits and words); `%canon` upcases and strips the leading `%`, so `"%IX0.0"` and `"IX0.0"` are the same operand.
-- **The time base is the scan**: one scan = one tick. There is no real-time clock; the GUI's Scan command is the clock.
+- **The time base is sim milliseconds, sampled once per scan boundary** (`%begin-scan`): all rungs in a scan see the same timestamp. With `time-fn` nil (the default) the clock is frozen virtual time — each scan advances `clock-ms` by `scan-period-ms` (default 1000, so one manual Scan = one second, keeping stepping and tests deterministic). `sim-start-realtime`/`sim-stop-realtime` switch to/from a wall-clock `time-fn` (used by the GUI's Run mode; tests inject fake time-fns instead of sleeping). Timers advance by the scan's `memory-dt-ms`; timer presets are IEC TIME literals (`T#5s`) or bare-integer ms, counter presets are counts.
+- The GUI's Run command free-runs via a bordeaux-threads ticker that only enqueues a tick command through `execute-frame-command` — all sim mutation stays in the frame's command loop, so there is no locking. Keep it that way: never touch the sim directly from a background thread.
 - Timer/counter instance state lives in ordinary memory under the instance name (done bit + elapsed/count word) plus internal keys suffixed with `#` (e.g. `"T1#P"` for edge detection, `"C1#PV"` for CTD reload). `#` can't appear in an IL operand, so no collisions; UIs filter `#` keys out of I/O panels.
-- The `sim` struct tracks `next-rung` for single-stepping: `step-rung` runs one rung, `step-scan` completes the current scan (all rungs at a boundary, the remainder mid-flight), `stabilize` runs scans to quiescence comparing **bits only** — deliberately, so it never fast-forwards a running timer.
+- The `sim` struct tracks `next-rung` for single-stepping: `step-rung` runs one rung, `step-scan` completes the current scan (all rungs at a boundary, the remainder mid-flight), `stabilize` runs scans to quiescence comparing **bits only** — deliberately, so it never fast-forwards a running timer to its preset.
 
 ### Layout/rendering
 

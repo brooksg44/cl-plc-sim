@@ -20,7 +20,8 @@
 ;;;;   (:coil <kind> <operand> <expr> [<preset>])
 ;;;;
 ;;;; kind is :NORMAL, :SET, or :RESET for plain coils, or a timer/counter kind
-;;;; (:TON :TOF :TP :CTU :CTD) -- those carry the extra <preset> (scan ticks).
+;;;; (:TON :TOF :TP :CTU :CTD) -- those carry the extra <preset>: milliseconds
+;;;; of sim time for timers, an edge count for counters.
 
 (in-package #:plc-sim)
 
@@ -34,6 +35,11 @@
 
 (defun contactp (node)
   (and (consp node) (eq (car node) :contact)))
+
+(defun timer-kind-p (kind)
+  "True for coil kinds whose preset is a duration in milliseconds (timers),
+as opposed to an edge count (counters)."
+  (and (member kind '(:ton :tof :tp)) t))
 
 (defun contact-mode (node) (second node))
 (defun contact-operand (node) (third node))

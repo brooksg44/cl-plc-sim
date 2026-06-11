@@ -237,17 +237,52 @@ ST Q"))))
     (is (= 7 (stabilize sim :max-scans 7)))))
 
 ;;; ---------------------------------------------------------------------------
-;;; Timers and counters (time base: one scan = one tick)
+;;; Timers and counters (time base: sim milliseconds; the default virtual
+;;; clock advances 1000 ms per scan, so one Scan = one second)
 ;;; ---------------------------------------------------------------------------
 
 (test parse-timer-counter
+  ;; a bare integer timer preset means milliseconds
   (is (equal '((:coil :ton "T1" (:contact :no "A") 5))
              (parse-il-string "LD A
 TON T1, 5")))
+  ;; IEC TIME literals
+  (is (equal '((:coil :ton "T1" (:contact :no "A") 5000))
+             (parse-il-string "LD A
+TON T1, T#5s")))
   ;; the comma is optional
   (is (equal '((:coil :ctu "C1" (:contact :no "A") 3))
              (parse-il-string "LD A
 CTU C1 3"))))
+
+(test parse-time-literals
+  (flet ((preset (text)
+           (fifth (first (parse-il-string (format nil "LD A~%TON T1, ~A" text))))))
+    (is (= 500 (preset "T#500ms")))
+    (is (= 5000 (preset "T#5s")))
+    (is (= 90000 (preset "T#1m30s")))
+    (is (= 90000 (preset "T#1m_30s")))    ; underscore separators
+    (is (= 1500 (preset "T#1.5s")))       ; decimal values
+    (is (= 7200000 (preset "TIME#2h")))   ; long prefix, hours
+    (signals error (preset "T#5x"))       ; unknown unit
+    (signals error (preset "T#s"))))      ; missing value
+
+(test format-time-literal-canonical
+  (is (string= "T#500ms" (format-time-literal 500)))
+  (is (string= "T#5s" (format-time-literal 5000)))
+  (is (string= "T#90s" (format-time-literal 90000)))
+  (is (string= "T#2m" (format-time-literal 120000)))
+  (is (string= "T#0ms" (format-time-literal 0)))
+  ;; the printer emits literals the parser reads back exactly
+  (let ((p1 (parse-il-string "LD A
+TON T1, T#1.5s")))
+    (is (search "T#1500ms" (program->il p1)))
+    (is (equal p1 (parse-il-string (program->il p1))))))
+
+(test format-duration-display
+  (is (string= "300ms" (format-duration 300)))
+  (is (string= "5s" (format-duration 5000)))
+  (is (string= "1.5s" (format-duration 1500))))
 
 (test timer-counter-round-trips
   (let ((p1 (parse-il-string "LD A
@@ -265,15 +300,15 @@ STN Q"))))
 
 (test ton-delays-then-fires-then-resets
   (let* ((sim (make-sim (parse-il-string "LD A
-TON T1, 3
+TON T1, T#3s
 LD T1
 ST Q")))
          (m (sim-memory sim)))
     (setf (mem-bit m "A") t)
-    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; tick 1
-    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; tick 2
-    (step-scan sim) (is (eq t   (mem-bit m "Q")))   ; tick 3: done
-    (step-scan sim) (is (= 3 (mem-word m "T1")))    ; elapsed clamps at preset
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; t=1s
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; t=2s
+    (step-scan sim) (is (eq t   (mem-bit m "Q")))   ; t=3s: done
+    (step-scan sim) (is (= 3000 (mem-word m "T1"))) ; elapsed clamps at preset
     (setf (mem-bit m "A") nil)                      ; input drops -> resets
     (step-scan sim)
     (is (eq nil (mem-bit m "Q")))
@@ -283,7 +318,7 @@ ST Q")))
   ;; IEC 61131-3: Q=1 while IN=1; after IN drops, Q=0 once ET>=PT -- on the
   ;; very scan ET reaches PT, mirroring TON's rise.
   (let* ((sim (make-sim (parse-il-string "LD A
-TOF F1, 2
+TOF F1, T#2s
 LD F1
 ST Q")))
          (m (sim-memory sim)))
@@ -291,18 +326,18 @@ ST Q")))
     (setf (mem-bit m "A") t) (step-scan sim)
     (is (eq t (mem-bit m "Q")))                     ; follows IN at once
     (setf (mem-bit m "A") nil)
-    (step-scan sim) (is (eq t   (mem-bit m "Q")))   ; ET=1 < PT: holding
-    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; ET=2 = PT: Q drops
-    (is (= 2 (mem-word m "F1")))                    ; ET holds at PT
+    (step-scan sim) (is (eq t   (mem-bit m "Q")))   ; ET=1s < PT: holding
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))   ; ET=2s = PT: Q drops
+    (is (= 2000 (mem-word m "F1")))                 ; ET holds at PT
     ;; IN returning true mid-hold keeps Q on and restarts the hold
     (setf (mem-bit m "A") t) (step-scan sim)
     (setf (mem-bit m "A") nil) (step-scan sim)
     (is (eq t (mem-bit m "Q")))
-    (is (= 1 (mem-word m "F1")))))
+    (is (= 1000 (mem-word m "F1")))))
 
 (test tp-pulses-for-preset-scans-not-retriggerable
   (let* ((sim (make-sim (parse-il-string "LD A
-TP P1, 2")))
+TP P1, T#2s")))
          (m (sim-memory sim)))
     (setf (mem-bit m "A") t)
     (step-scan sim) (is (eq t (mem-bit m "P1")))    ; edge fires the pulse
@@ -354,6 +389,55 @@ R C1")))
       (setf (mem-bit m "B") t) (step-scan sim)
       (is (= 2 (mem-word m "C1")))
       (is (eq nil (mem-bit m "C1"))))))
+
+(test virtual-clock-scan-period-is-configurable
+  ;; sub-second stepping: 100 ms per scan, a T#250ms TON fires on scan 3
+  (let* ((sim (make-sim (parse-il-string "LD A
+TON T1, T#250ms")))
+         (m (sim-memory sim)))
+    (setf (sim-scan-period-ms sim) 100)
+    (setf (mem-bit m "A") t)
+    (step-scan sim) (is (eq nil (mem-bit m "T1")))  ; 100ms
+    (step-scan sim) (is (eq nil (mem-bit m "T1")))  ; 200ms
+    (step-scan sim) (is (eq t   (mem-bit m "T1")))  ; 300ms >= 250ms
+    (is (= 300 (sim-clock-ms sim)))))
+
+(test realtime-clock-follows-injected-time-fn
+  ;; realtime mode, but deterministic: the "wall clock" is a settable variable
+  (let* ((now 1000000)
+         (sim (make-sim (parse-il-string "LD A
+TON T1, T#5s")))
+         (m (sim-memory sim)))
+    (sim-start-realtime sim (lambda () now))
+    (is (eq t (sim-running-p sim)))
+    (is (= now (sim-clock-ms sim)))       ; synced at start: no epoch-sized DT
+    (setf (mem-bit m "A") t)
+    (incf now 2000) (step-scan sim)
+    (is (eq nil (mem-bit m "T1")))        ; 2s elapsed
+    (is (= 2000 (mem-word m "T1")))
+    (incf now 3000) (step-scan sim)
+    (is (eq t (mem-bit m "T1")))          ; 5s elapsed: done
+    ;; stopping freezes the clock and hands back to the virtual one
+    (sim-stop-realtime sim)
+    (is (eq nil (sim-running-p sim)))
+    (is (null (sim-time-fn sim)))
+    (let ((frozen (sim-clock-ms sim)))
+      (step-scan sim)                     ; manual scan: +scan-period, not wall
+      (is (= (+ frozen (sim-scan-period-ms sim)) (sim-clock-ms sim))))))
+
+(test all-rungs-in-a-scan-see-the-same-timestamp
+  ;; two identical timers in one program complete on the same scan even when
+  ;; stepped rung by rung -- time is sampled once, at the scan boundary
+  (let* ((sim (make-sim (parse-il-string "LD A
+TON T1, T#2s
+LD A
+TON T2, T#2s")))
+         (m (sim-memory sim)))
+    (setf (mem-bit m "A") t)
+    (dotimes (i 4) (step-rung sim))       ; two full scans, one rung at a time
+    (is (eq t (mem-bit m "T1")))
+    (is (eq t (mem-bit m "T2")))
+    (is (= (mem-word m "T1") (mem-word m "T2")))))
 
 (test timer-coil-prim-carries-preset
   (let ((prims (layout-rung (first (parse-il-string "LD A
