@@ -265,34 +265,45 @@ rest of the cycle."
   "Free-run scan rate: the ticker thread requests a scan this often.  Timer
 accuracy does not depend on it -- each scan samples the wall clock.")
 
+;;; Free-run ticks travel as EVENTS, not commands: a command enqueued via
+;;; EXECUTE-FRAME-COMMAND goes through the interactor's command loop, which
+;;; echoes it next to the "Command:" prompt 10x a second and makes typing
+;;; impossible.  A custom event is handled by the frame's event loop directly,
+;;; leaving the prompt alone.  Sim mutation still happens only in the frame's
+;;; own process (HANDLE-EVENT runs there), so no locking is needed.
+
+(defclass tick-event (window-manager-event)
+  ((frame :initarg :frame :reader tick-event-frame)))
+
+(defmethod handle-event (sheet (event tick-event))
+  (declare (ignore sheet))
+  (let* ((frame (tick-event-frame event))
+         (sim (frame-sim frame)))
+    (when (plc-sim:sim-running-p sim)
+      (plc-sim:step-scan sim)
+      (redisplay-frame-panes frame))))
+
 (define-ladder-frame-command (com-run :name "Run")
     ()
   "Free run: scan continuously, timers following the wall clock, until Stop.
 Toggle still works while running; Scan/Step pause the run first.
 
-The ticker thread never touches the sim itself: it only enqueues COM-TICK via
-EXECUTE-FRAME-COMMAND (safe from any thread), so all sim mutation happens in
-the frame's own command loop and no locking is needed."
+The ticker thread never touches the sim itself: it only queues TICK-EVENTs
+onto the frame's event queue (safe from any thread); HANDLE-EVENT scans and
+redisplays in the frame's own process."
   (let* ((frame *application-frame*)
-         (sim (frame-sim frame)))
+         (sim (frame-sim frame))
+         (sheet (frame-top-level-sheet frame)))
     (unless (plc-sim:sim-running-p sim)
       (plc-sim:sim-start-realtime sim)
       (bt:make-thread
        (lambda ()
          (loop while (plc-sim:sim-running-p sim)
                do (sleep *run-tick-seconds*)
-                  (execute-frame-command frame '(com-tick))))
+                  (queue-event sheet (make-instance 'tick-event
+                                                    :sheet sheet
+                                                    :frame frame))))
        :name "plc-sim scan ticker"))))
-
-(define-ladder-frame-command (com-tick)   ; no :name -- not user-typeable
-    ()
-  "One free-running scan, enqueued by the ticker thread.  Redisplays
-explicitly: commands arriving via the event queue bypass the command loop's
-own redisplay pass."
-  (let ((sim (frame-sim *application-frame*)))
-    (when (plc-sim:sim-running-p sim)
-      (plc-sim:step-scan sim)
-      (redisplay-frame-panes *application-frame*))))
 
 (define-ladder-frame-command (com-stop :name "Stop")
     ()

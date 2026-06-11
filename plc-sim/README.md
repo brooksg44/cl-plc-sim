@@ -282,7 +282,8 @@ Both example programs rendered mid-story (green = energized; boxes show
    rails. Good enough to read; refine before shipping.
 5. **Compile-verify and flesh out `clim-ui.lisp`** once McCLIM loads.
 6. ~~**Threaded run mode**~~ — **done**; the GUI's `Run` command starts a
-   `bordeaux-threads` ticker that enqueues scans into the frame's command loop
-   (so all sim mutation stays single-threaded), with timers following the wall
-   clock. `Stop`/`Scan`/`Step` pause it.
+   `bordeaux-threads` ticker that queues tick *events* onto the frame's event
+   queue (so all sim mutation stays in the frame's own process, and the
+   interactor prompt is left alone), with timers following the wall clock.
+   `Stop`/`Scan`/`Step` pause it.
 ```
