@@ -45,9 +45,10 @@ rather than shrinking labels into each other.")
        :display-function 'display-io
        :scroll-bars t
        :text-style (make-text-style :fix :roman 12))
-   ;; Scan / Step / Run / Stop / Toggle / Load / Quit.  Kept short (and pinned
-   ;; with :max-height) so the ladder + I/O row above gets the vertical space.
-   (interactor :interactor :height 56 :max-height 56))
+   ;; Scan / Step / Run / Stop / Toggle / Load / Quit.  Tall enough that the
+   ;; output of "Help Commands" is readable, pinned with :max-height so the
+   ;; layout doesn't grow it further at the ladder row's expense.
+   (interactor :interactor :height 110 :max-height 110))
   (:layouts
    (default
     (vertically ()
@@ -324,8 +325,10 @@ manually from there."
     (plc-sim:sim-stop-realtime sim)
     (plc-sim:load-il sim path)))
 
-(define-ladder-frame-command (com-quit :name "Quit") ()
-  (frame-exit *application-frame*))
+;; No Quit command here: McCLIM's GLOBAL-COMMAND-TABLE (inherited by every
+;; frame) already provides Quit/Help/Clear/Describe, and its Quit is the same
+;; (frame-exit *application-frame*).  Defining our own made "Help Commands"
+;; list Quit twice.
 
 ;;; ---------------------------------------------------------------------------
 ;;; Entry point
@@ -337,4 +340,4 @@ manually from there."
     (when il (plc-sim:load-il sim il))
     (run-frame-top-level
      (make-application-frame 'ladder-frame :sim sim
-                                           :width 1000 :height 640))))
+                                           :width 1000 :height 760))))
