@@ -41,4 +41,16 @@
 (funcall (read-from-string "ql:quickload") "mcclim" :silent t)
 (funcall (read-from-string "ql:quickload") "plc-sim-clim")
 
-(format t "~&;; Ready.  Launch with:  (plc-sim-clim:run :il #p\"examples/motor-seal-in.il\")~%")
+;; --- the launch banner: list every example with its first comment line -----
+(let* ((here (make-pathname :name nil :type nil
+                            :defaults (or *load-truename* (truename "."))))
+       (examples (sort (directory (merge-pathnames "examples/*.il" here))
+                       #'string< :key #'pathname-name)))
+  (format t "~&;; Ready.  Launch with:  (plc-sim-clim:run :il #p\"examples/motor-seal-in.il\")~%")
+  (when examples
+    (format t ";;~%;; Examples (pass any of these to :il):~%")
+    (dolist (e examples)
+      (format t ";;   examples/~A.il~35,2T~A~%"
+              (pathname-name e)
+              (with-open-file (s e)
+                (string-left-trim "/ " (read-line s nil "")))))))

@@ -43,6 +43,7 @@ examples/
   motor-interlock.il   Same logic with the fault folded in as a series interlock
   pump-on-delay.il     Timers: TON delayed pump start + TOF cooling-fan run-on
   batch-counter.il     Counters: CTU part counter + CTD remaining-capacity, batch reset
+  stamp-press.il       One-shot: TP fires a fixed 2 s stamp pulse on a part's rising edge
 docs/                  Rendered ladder images for the README (regen: make-docs.lisp)
 ```
 
@@ -89,7 +90,7 @@ only appears on the scan where the fault first asserts.
 | Round-trip (IL → tree → IL → tree) | ✅ fixed-point verified |
 | McCLIM GUI | ✅ compiles & loads against McCLIM; a live window needs a display (XQuartz) |
 
-**133/133 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
+**135/135 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
 compiles and loads against McCLIM.** The GUI window itself was not *displayed*
 here because this machine has no X11 backend (XQuartz not installed, `DISPLAY`
 unset) — see "Launch the McCLIM GUI" below.

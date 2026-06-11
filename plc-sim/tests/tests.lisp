@@ -445,8 +445,8 @@ TON T1, 5")))))
     (is (equal '(:coil 3 0 :ton "T1" 5)
                (find :coil prims :key #'first)))))
 
-(test example-pump-and-counter-files-parse
-  (dolist (name '("pump-on-delay.il" "batch-counter.il"))
+(test example-timer-counter-files-parse
+  (dolist (name '("pump-on-delay.il" "batch-counter.il" "stamp-press.il"))
     (let ((prog (parse-il (merge-pathnames
                            (format nil "examples/~A" name)
                            (asdf:system-source-directory "plc-sim")))))
