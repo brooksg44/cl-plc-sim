@@ -318,12 +318,39 @@ redisplays in the frame's own process."
 manually from there."
   (plc-sim:sim-stop-realtime (frame-sim *application-frame*)))
 
+(defun resolve-il-path (path)
+  "Find the existing file PATH names, trying it as given (relative paths
+resolve against the current directory), then under examples/, then -- forgiving
+a mistyped leading slash like /examples/foo.il -- re-rooted at the current
+directory.  Returns a truename naming a file, or NIL."
+  (let* ((p (pathname path))
+         (dir (pathname-directory p))
+         (relative (if (eq (first dir) :absolute)
+                       (make-pathname :directory (and (rest dir)
+                                                      (cons :relative (rest dir)))
+                                      :defaults p)
+                       p))
+         (hit (or (probe-file p)
+                  (probe-file (merge-pathnames relative "examples/"))
+                  (probe-file (merge-pathnames relative)))))
+    (and hit (pathname-name hit) hit)))   ; nil pathname-name => a directory
+
 (define-ladder-frame-command (com-load :name "Load")
     ((path 'pathname))
-  "Load an IL file into the simulator, pausing free-run mode first."
-  (let ((sim (frame-sim *application-frame*)))
-    (plc-sim:sim-stop-realtime sim)
-    (plc-sim:load-il sim path)))
+  "Load an IL file into the simulator, pausing free-run mode first.  The path
+is resolved by RESOLVE-IL-PATH; a missing file or a parse error reports to the
+interactor rather than landing in the debugger (the old program stays loaded
+-- LOAD-IL only replaces it after a successful parse)."
+  (let ((sim (frame-sim *application-frame*))
+        (resolved (resolve-il-path path)))
+    (cond ((null resolved)
+           (format *query-io* "~&No such IL file: ~A~%" path))
+          (t
+           (plc-sim:sim-stop-realtime sim)
+           (handler-case (plc-sim:load-il sim resolved)
+             (error (e)
+               (format *query-io* "~&Load failed for ~A:~%  ~A~%"
+                       (file-namestring resolved) e)))))))
 
 ;; No Quit command here: McCLIM's GLOBAL-COMMAND-TABLE (inherited by every
 ;; frame) already provides Quit/Help/Clear/Describe, and its Quit is the same
