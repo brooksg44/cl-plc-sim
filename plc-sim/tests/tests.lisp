@@ -445,8 +445,148 @@ TON T1, 5")))))
     (is (equal '(:coil 3 0 :ton "T1" 5)
                (find :coil prims :key #'first)))))
 
+;;; ---------------------------------------------------------------------------
+;;; Numeric ops: arithmetic, comparisons, MOVE (IEC accumulator style)
+;;; ---------------------------------------------------------------------------
+
+(test parse-numeric-loads-and-arith
+  ;; literals / word addresses / .CV access load a NUMERIC accumulator;
+  ;; ST of it emits an :ASSIGN rung
+  (is (equal '((:assign "%MW1" (:arith :add (:word "%MW0") (:lit 5))))
+             (parse-il-string "LD %MW0
+ADD 5
+ST %MW1")))
+  ;; left-assoc fold: same op flattens n-ary, mixed ops nest
+  (is (equal '((:assign "%MW0" (:arith :add (:lit 1) (:lit 2) (:lit 3))))
+             (parse-il-string "LD 1
+ADD 2
+ADD 3
+ST %MW0")))
+  (is (equal '((:assign "%MW0"
+                (:arith :mul (:arith :add (:lit 1) (:lit 2)) (:lit 3))))
+             (parse-il-string "LD 1
+ADD 2
+MUL 3
+ST %MW0"))))
+
+(test parse-move-sugar
+  ;; MOVE src, dst == LD src / ST dst (printer canonicalizes it away)
+  (is (equal (parse-il-string "LD 5
+ST %MW0")
+             (parse-il-string "MOVE 5, %MW0")))
+  (is (equal '((:assign "%MW1" (:word "%MW0")))
+             (parse-il-string "MOVE %MW0 %MW1"))))
+
+(test parse-comparison-makes-boolean
+  (is (equal '((:coil :normal "Q" (:cmp :ge (:word "C1.CV") (:lit 2))))
+             (parse-il-string "LD C1.CV
+GE 2
+ST Q")))
+  ;; a comparison combines with contacts like any other boolean element
+  (is (equal '((:coil :normal "Q"
+                (:and (:contact :no "A")
+                      (:cmp :gt (:word "%MW0") (:lit 5)))))
+             (parse-il-string "LD A
+AND(
+LD %MW0
+GT 5
+)
+ST Q"))))
+
+(test parse-numeric-type-errors
+  (signals error (parse-il-string "LD 5
+AND B
+ST Q"))                                 ; boolean op on a numeric accumulator
+  (signals error (parse-il-string "LD A
+OR B
+ADD 5
+ST %MW0"))                              ; arithmetic on boolean structure
+  (signals error (parse-il-string "LD 5
+ST 7")))                                ; storing to a literal
+
+(test numeric-round-trips
+  (dolist (text '("LD %MW0
+ADD 5
+MUL 2
+ST %MW1"
+                  "LD C1.CV
+GE 2
+ST Q"
+                  "LD A
+AND(
+LD %MW0
+LT 5
+)
+OR C
+ST Q"
+                  "MOVE 5, %MW0"))
+    (let* ((p1 (parse-il-string text))
+           (p2 (parse-il-string (program->il p1))))
+      (is (equal p1 p2)))))
+
+(test eval-arithmetic
+  (let ((m (make-memory)))
+    (setf (mem-word m "MW0") 7)
+    (is (= 12 (eval-value '(:arith :add (:word "%MW0") (:lit 5)) m)))
+    (is (= 14 (eval-value '(:arith :mul (:word "%MW0") (:lit 2)) m)))
+    (is (= 3 (eval-value '(:arith :div (:lit 7) (:lit 2)) m)))    ; truncates
+    (is (= 0 (eval-value '(:arith :div (:lit 7) (:lit 0)) m)))    ; div0 -> 0
+    (is (= 7 (eval-value '(:word "MW0.CV") m)))))   ; .CV strips to the word
+
+(test assign-stores-unconditionally-each-scan
+  (let* ((sim (make-sim (parse-il-string "LD 3
+SUB C1.CV
+ST %MW0")))
+         (m (sim-memory sim)))
+    (step-scan sim)
+    (is (= 3 (mem-word m "MW0")))
+    (setf (mem-word m "C1") 2)          ; poke the counter word directly
+    (step-scan sim)                     ; no rung condition: recomputed anyway
+    (is (= 1 (mem-word m "MW0")))))
+
+(test cmp-gates-a-coil
+  (let* ((sim (make-sim (parse-il-string "LD %MW0
+GE 2
+ST Q")))
+         (m (sim-memory sim)))
+    (step-scan sim) (is (eq nil (mem-bit m "Q")))
+    (setf (mem-word m "MW0") 2) (step-scan sim)
+    (is (eq t (mem-bit m "Q")))
+    (setf (mem-word m "MW0") 1) (step-scan sim)
+    (is (eq nil (mem-bit m "Q")))))
+
+(test layout-assign-and-cmp-prims
+  (let ((prims (layout-rung (first (parse-il-string "MOVE 5, %MW0")))))
+    (is (equal '(:assign 1 0 2 "%MW0" (:lit 5))
+               (find :assign prims :key #'first))))
+  (let ((prims (layout-rung (first (parse-il-string "LD C1.CV
+GE 2
+ST Q")))))
+    (is (equal '(:cmp 0 0 :ge (:word "C1.CV") (:lit 2))
+               (find :cmp prims :key #'first)))
+    (is (equal '(:coil 3 0 :normal "Q") (find :coil prims :key #'first)))))
+
+(test example-parts-remaining-behaviour
+  (let* ((sim (make-sim (parse-il (merge-pathnames
+                                   "examples/parts-remaining.il"
+                                   (asdf:system-source-directory "plc-sim")))))
+         (m (sim-memory sim)))
+    (flet ((pulse ()
+             (setf (mem-bit m "IX0.0") t) (step-scan sim)
+             (setf (mem-bit m "IX0.0") nil) (step-scan sim)))
+      (step-scan sim)
+      (is (= 3 (mem-word m "MW0")))     ; nothing counted: remaining 3
+      (pulse) (pulse)
+      (is (= 1 (mem-word m "MW0")))     ; 2 parts -> remaining 1
+      (is (eq t (mem-bit m "QX0.2")))   ; almost-full lamp at GE 2
+      (is (eq nil (mem-bit m "QX0.0"))) ; gate still shut
+      (pulse)
+      (is (= 0 (mem-word m "MW0")))
+      (is (eq t (mem-bit m "QX0.0")))))) ; batch done: gate opens
+
 (test example-timer-counter-files-parse
-  (dolist (name '("pump-on-delay.il" "batch-counter.il" "stamp-press.il"))
+  (dolist (name '("pump-on-delay.il" "batch-counter.il" "stamp-press.il"
+                  "parts-remaining.il"))
     (let ((prog (parse-il (merge-pathnames
                            (format nil "examples/~A" name)
                            (asdf:system-source-directory "plc-sim")))))

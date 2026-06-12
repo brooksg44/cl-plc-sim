@@ -74,11 +74,14 @@ rather than shrinking labels into each other.")
   (let ((maxx 1) (maxy 1))
     (dolist (p prims)
       (ecase (first p)
-        ((:contact :coil)
+        ((:contact :coil :cmp)
          (setf maxx (max maxx (+ 2 (second p)))
                maxy (max maxy (+ 1 (third p)))))
         (:wire (destructuring-bind (x1 y1 x2 y2) (rest p)
                  (setf maxx (max maxx x1 x2) maxy (max maxy y1 y2))))
+        (:assign (destructuring-bind (x y w dst v) (rest p)
+                   (declare (ignore dst v))
+                   (setf maxx (max maxx (+ x w)) maxy (max maxy (+ y 1)))))
         (:fb (destructuring-bind (x y w h name) (rest p)
                (declare (ignore name))
                (setf maxx (max maxx (+ x w)) maxy (max maxy (+ y h)))))))
@@ -121,6 +124,12 @@ PANE's visible viewport — so the whole program shows without scrolling."
                                   (plc-sim:mem-word memory op) preset)
                      (draw-coil pane x y kind op
                                 (plc-sim:mem-bit memory op)))))
+              (:cmp
+               (destructuring-bind (x y op a b) (rest p)
+                 (draw-cmp pane x y op a b memory)))
+              (:assign
+               (destructuring-bind (x y w dst v) (rest p)
+                 (draw-assign pane x y w dst v memory)))
               (:fb
                (destructuring-bind (x y w h name) (rest p)
                  (declare (ignore h))
@@ -193,6 +202,39 @@ pads a spare cell past every coil."
     (with-output-as-presentation (pane op 'operand)
       (draw-text* pane (princ-to-string op) x0 (- cy qh 6)
                   :text-size (lbl-size)))))
+
+(defun draw-cmp (pane x y op a b memory)
+  "A comparison element (contact-like, 2 cells): a slim box showing e.g.
+C1.CV>=2, green while the comparison currently holds."
+  (let* ((cx (gx x)) (cy (gx y))
+         (node (list :cmp op a b))
+         (live (plc-sim:eval-expr node memory))
+         (ink (if live +forest-green+ +gray40+))
+         (q (round (* *cell* 1/4)))
+         (x0 (+ cx 4)) (x1 (+ cx (* 2 *cell*) -4)))
+    (draw-line* pane cx cy x0 cy :ink ink :line-thickness 2)
+    (draw-line* pane x1 cy (+ cx (* 2 *cell*)) cy :ink ink :line-thickness 2)
+    (draw-rectangle* pane x0 (- cy q) x1 (+ cy q)
+                     :filled nil :ink ink :line-thickness 2)
+    (draw-text* pane (plc-sim:format-cmp-expr node) (+ cx *cell*) (+ cy 4)
+                :align-x :center :text-size (lbl-size) :ink ink)))
+
+(defun draw-assign (pane x y w dst v memory)
+  "An unconditional numeric store box (EN is the rail): op label on top, the
+value expression with its live value below, the destination above the box."
+  (let* ((cx (gx x)) (cy (gx y)) (ink +gray40+)
+         (qh (round (* *cell* 1/3)))
+         (x0 (+ cx 4)) (x1 (+ cx (* w *cell*) -4))
+         (mid (+ cx (round (* w *cell* 1/2)))))
+    (draw-rectangle* pane x0 (- cy qh) x1 (+ cy qh)
+                     :filled nil :ink ink :line-thickness 2)
+    (draw-text* pane (plc-sim:value-op-label v) mid (- cy 3)
+                :align-x :center :text-size (lbl-size) :ink ink)
+    (draw-text* pane (format nil "~A=~D" (plc-sim:format-value-expr v)
+                             (plc-sim:eval-value v memory))
+                mid (+ cy qh -4)
+                :align-x :center :text-size (lbl-size) :ink ink)
+    (draw-text* pane dst x0 (- cy qh 6) :text-size (lbl-size))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; The I/O panel: every known bit, clickable to toggle
@@ -311,6 +353,18 @@ redisplays in the frame's own process."
                                                     :sheet sheet
                                                     :frame frame))))
        :name "plc-sim scan ticker"))))
+
+(define-ladder-frame-command (com-set :name "Set")
+    ((name 'expression :prompt "word") (value 'integer :prompt "value"))
+  "Set a word value -- \"Set %MW0 42\" -- the numeric counterpart of Toggle.
+Runs a single scan afterwards under the same conditions Toggle does (at a
+scan boundary, not free-running) so the display reflects the new value."
+  (let* ((sim (frame-sim *application-frame*))
+         (m (plc-sim:sim-memory sim)))
+    (setf (plc-sim:mem-word m (princ-to-string name)) value)
+    (when (and (not (plc-sim:sim-running-p sim))
+               (zerop (plc-sim:sim-next-rung sim)))
+      (plc-sim:step-scan sim))))
 
 (define-ladder-frame-command (com-stop :name "Stop")
     ()

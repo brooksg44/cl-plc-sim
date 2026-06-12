@@ -13,6 +13,8 @@
 ;;;; Emitted primitives (grid units; x grows right, y grows down):
 ;;;;   (:contact x y mode operand)
 ;;;;   (:coil    x y kind operand [preset])   preset rides along for timers/counters
+;;;;   (:cmp     x y op a b)         comparison element (contact-like, 2 cells)
+;;;;   (:assign  x y w dst value)    unconditional numeric store box
 ;;;;   (:wire    x1 y1 x2 y2)        horizontal or vertical segment
 ;;;;   (:fb      x y w h name)
 
@@ -32,6 +34,7 @@
        ;; lead-out wire in the second, so each operand label gets its own cell
        ;; and series labels never crowd their neighbours.
        (:contact (values 2 1))
+       (:cmp     (values 2 1))
        (:fb      (values 2 1))
        (:not     (expr-size (second expr)))
        (:and (let ((w 0) (h 1))
@@ -52,7 +55,14 @@
 
 (defun layout-rung (rung &key (row 0))
   "Return a list of drawing primitives for RUNG, with its top-left at ROW.
-The coil is placed one cell to the right of the contact network."
+A :COIL rung places its coil one cell right of the contact network; an
+:ASSIGN rung is a 2-cell store box hung straight off the rail (its EN is the
+rail itself -- numeric stores are unconditional)."
+  (when (eq (first rung) :assign)
+    (destructuring-bind (dst v) (rest rung)
+      (return-from layout-rung
+        (list (list :wire 0 row 1 row)
+              (list :assign 1 row 2 dst v)))))
   (destructuring-bind (tag kind operand expr &optional preset) rung
     (declare (ignore tag))
     (let ((prims '()))
@@ -66,6 +76,10 @@ The coil is placed one cell to the right of the contact network."
                       (emit (list :contact x y mode op))
                       (when (> w 1)               ; pad to fill the cell width
                         (emit (list :wire (1+ x) y (+ x w) y)))))
+                   ((eq (node-op e) :cmp)         ; 2 cells, like a contact
+                    (emit (list* :cmp x y (node-args e)))
+                    (when (> w 2)
+                      (emit (list :wire (+ x 2) y (+ x w) y))))
                    ((eq (node-op e) :fb)
                     (multiple-value-bind (ew eh) (expr-size e)
                       (emit (list :fb x y ew eh (second e)))))
@@ -106,8 +120,9 @@ rung's starting row -- for callers that point at a rung (single-stepping)."
   (let ((all '()) (row 0) (starts '()))
     (dolist (rung program)
       (push row starts)
-      (multiple-value-bind (w h) (expr-size (fourth rung))
-        (declare (ignore w))
+      (let ((h (ecase (first rung)
+                 (:assign 1)
+                 (:coil (nth-value 1 (expr-size (fourth rung)))))))
         (dolist (p (layout-rung rung :row row)) (push p all))
         (incf row (+ (max h 1) row-gap))))
     (values (nreverse all) row (nreverse starts))))

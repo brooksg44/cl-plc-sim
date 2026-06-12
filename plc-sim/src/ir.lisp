@@ -13,15 +13,29 @@
 ;;;;   (:and <expr> <expr> ...)      elements in SERIES   (horizontal)
 ;;;;   (:or  <expr> <expr> ...)      elements in PARALLEL (vertical branch)
 ;;;;   (:not <expr>)                 boolean negation of a sub-expression
-;;;;   (:fb <name> <operand> ...)    function-block / non-boolean box
+;;;;   (:cmp <op> <value> <value>)   numeric comparison used like a contact;
+;;;;                                 op is :GT :GE :EQ :NE :LE :LT
+;;;;   (:fb <name> <operand> ...)    function-block box (reserved for CAL)
 ;;;;
-;;;; A rung (one ladder row) is:
+;;;; VALUE expressions (numeric, IL's other accumulator type):
+;;;;
+;;;;   (:lit <integer>)              a literal
+;;;;   (:word <string>)              a word read; the spelling is preserved
+;;;;                                 ("%MW0", "C1.CV") and eval strips the
+;;;;                                 .CV/.ET suffix to find the memory word
+;;;;   (:arith <op> <v> <v> ...)     op is :ADD :SUB :MUL :DIV; n-ary,
+;;;;                                 left-folded, same-op flattened
+;;;;
+;;;; A rung (one ladder row) is one of:
 ;;;;
 ;;;;   (:coil <kind> <operand> <expr> [<preset>])
+;;;;   (:assign <dst> <value-expr>)
 ;;;;
-;;;; kind is :NORMAL, :SET, or :RESET for plain coils, or a timer/counter kind
-;;;; (:TON :TOF :TP :CTU :CTD) -- those carry the extra <preset>: milliseconds
-;;;; of sim time for timers, an edge count for counters.
+;;;; Coil kind is :NORMAL, :SET, or :RESET for plain coils, or a timer/counter
+;;;; kind (:TON :TOF :TP :CTU :CTD) -- those carry the extra <preset>:
+;;;; milliseconds of sim time for timers, an edge count for counters.
+;;;; An :ASSIGN rung stores a numeric value UNCONDITIONALLY each scan (IEC IL
+;;;; semantics; conditional stores need JMP, which is not implemented yet).
 
 (in-package #:plc-sim)
 
@@ -40,6 +54,53 @@
   "True for coil kinds whose preset is a duration in milliseconds (timers),
 as opposed to an edge count (counters)."
   (and (member kind '(:ton :tof :tp)) t))
+
+(defun value-expr-p (node)
+  "True for numeric value expressions: (:lit n), (:word name), (:arith ...)."
+  (and (consp node) (member (car node) '(:lit :word :arith)) t))
+
+(defun %check-boolean (node context)
+  "Guard: NODE must not be a numeric value expression.  Returns NODE."
+  (when (value-expr-p node)
+    (error "~A needs a boolean, but the accumulator holds the numeric ~
+            expression ~A" context (format-value-expr node)))
+  node)
+
+;;; ---------------------------------------------------------------------------
+;;; Display formatting (shared by the SVG and McCLIM renderers)
+;;; ---------------------------------------------------------------------------
+
+(defun value-op-label (v)
+  "Box label for an :ASSIGN of V: the arithmetic op's name, or MOVE for a
+plain literal/word copy."
+  (if (eq (car v) :arith) (symbol-name (second v)) "MOVE"))
+
+(defun format-value-expr (v)
+  "Display form of value expression V: \"5\", \"%MW0\", \"%MW0+5\",
+\"(3-C1.CV)*2\".  Nested arguments get parentheses."
+  (ecase (car v)
+    (:lit (princ-to-string (second v)))
+    (:word (second v))
+    (:arith
+     (destructuring-bind (op . args) (cdr v)
+       (flet ((part (a) (if (eq (car a) :arith)
+                            (format nil "(~A)" (format-value-expr a))
+                            (format-value-expr a))))
+         (format nil "~{~A~}"
+                 (loop with sep = (ecase op
+                                    (:add "+") (:sub "-") (:mul "*") (:div "/"))
+                       for a in args for i from 0
+                       unless (zerop i) collect sep
+                       collect (part a))))))))
+
+(defun format-cmp-expr (cmp)
+  "Display form of a (:cmp op a b) node: \"C1.CV>=2\"."
+  (destructuring-bind (op a b) (cdr cmp)
+    (format nil "~A~A~A"
+            (format-value-expr a)
+            (ecase op (:gt ">") (:ge ">=") (:eq "=") (:ne "<>")
+                      (:le "<=") (:lt "<"))
+            (format-value-expr b))))
 
 (defun contact-mode (node) (second node))
 (defun contact-operand (node) (third node))
@@ -68,17 +129,20 @@ as opposed to an edge count (counters)."
 can fold an empty accumulator."
   (cond ((null a) b)
         ((null b) a)
-        (t (cons :and (append (%parts a :and) (%parts b :and))))))
+        (t (%check-boolean a "AND") (%check-boolean b "AND")
+           (cons :and (append (%parts a :and) (%parts b :and))))))
 
 (defun parallel (a b)
   "Combine A and B in parallel (logical OR).  NIL acts as identity."
   (cond ((null a) b)
         ((null b) a)
-        (t (cons :or (append (%parts a :or) (%parts b :or))))))
+        (t (%check-boolean a "OR") (%check-boolean b "OR")
+           (cons :or (append (%parts a :or) (%parts b :or))))))
 
 (defun negate (expr)
   "Logical negation.  For a single contact we flip its mode; for anything
 else we wrap it in a :NOT node."
+  (%check-boolean expr "NOT")
   (cond ((null expr) nil)
         ((contactp expr)
          (contact (contact-operand expr)

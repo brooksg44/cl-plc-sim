@@ -84,6 +84,16 @@ stabilizing or running a single scan (STABILIZE-P nil, to capture a transient)."
                            (setf (mem-bit m "IX0.0") t) (step-scan sim)
                            (setf (mem-bit m "IX0.0") nil) (step-scan sim)))))
 
+;; 6) Numeric ops: two parts counted -- the SUB box reads 3-C1.CV=1 and the
+;;    GE comparison is green (almost-full lamp lit), gate still shut.
+(render-state (%example "parts-remaining.il") (%doc-svg "parts-remaining")
+              :stabilize-p nil
+              :setup (lambda (sim)
+                       (let ((m (sim-memory sim)))
+                         (dotimes (i 2)
+                           (setf (mem-bit m "IX0.0") t) (step-scan sim)
+                           (setf (mem-bit m "IX0.0") nil) (step-scan sim)))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Optional: refresh PNGs via macOS qlmanage, if present.
 ;;; ---------------------------------------------------------------------------
@@ -122,7 +132,8 @@ names each output <input>.png, so we move <name>.svg.png into place afterward."
 (if (qlmanage-available-p)
     (qlmanage-pngs '("motor-seal-in-energized" "motor-seal-in-transient"
                      "motor-interlock-energized"
-                     "pump-on-delay-running" "batch-counter-complete"))
+                     "pump-on-delay-running" "batch-counter-complete"
+                     "parts-remaining"))
     (format t "  qlmanage unavailable; SVGs updated, PNGs left as-is.~%"))
 
 (format t "~%Done.~%")

@@ -60,8 +60,26 @@
     (:tof       "TOF")
     (:tp        "TP")
     (:ctu       "CTU")
-    (:ctd       "CTD"))
+    (:ctd       "CTD")
+    (:not       "NOT")
+    (:add       "ADD")
+    (:sub       "SUB")
+    (:mul       "MUL")
+    (:div       "DIV")
+    (:gt        "GT")
+    (:ge        "GE")
+    (:eq        "EQ")
+    (:ne        "NE")
+    (:le        "LE")
+    (:lt        "LT")
+    (:move      "MOVE"))
   "Mapping from canonical op keyword to accepted source spellings.")
+
+(defparameter *arith-kinds* '(:add :sub :mul :div)
+  "Accumulator arithmetic: combine the numeric accumulator with an operand.")
+
+(defparameter *cmp-kinds* '(:gt :ge :eq :ne :le :lt)
+  "Comparisons: numeric accumulator vs operand, leaving a BOOLEAN result.")
 
 (defparameter *fb-kinds* '(:ton :tof :tp :ctu :ctd)
   "Rung-terminating instructions that take an instance name AND a preset.")
@@ -98,9 +116,20 @@ the keyword :NETWORK so the caller can split rungs on it."
            (let ((kw (%normalize-mnemonic head)))
              (unless kw
                (error "Unknown IL mnemonic ~S in line: ~A" head line))
-             (if (member kw *fb-kinds*)
-                 (%parse-fb-args kw (rest parts) line)
-                 (list kw (second parts))))))))))
+             (cond ((member kw *fb-kinds*)
+                    (%parse-fb-args kw (rest parts) line))
+                   ((eq kw :move)
+                    (%parse-move-args (rest parts) line))
+                   (t (list kw (second parts)))))))))))
+
+(defun %parse-move-args (args line)
+  "Parse MOVE's arguments, \"src, dst\" (comma optional), into (:MOVE src dst).
+MOVE is sugar for LD src / ST dst -- the pretty-printer canonicalizes it away."
+  (let ((args (%split-ws (substitute #\Space #\, (format nil "~{~A~^ ~}" args)))))
+    (unless (= (length args) 2)
+      (error "MOVE needs a source and a destination, e.g. \"MOVE 5, %MW0\", ~
+              in line: ~A" line))
+    (list* :move args)))
 
 (defun %parse-fb-args (kw args line)
   "Parse a timer/counter line's arguments: \"T1, T#5s\" (comma optional) into
@@ -200,33 +229,89 @@ divides evenly: 5000 -> \"T#5s\", 90000 -> \"T#90s\", 120000 -> \"T#2m\",
         while nl do (setf start (1+ nl))))
 
 ;;; ---------------------------------------------------------------------------
+;;; Value operands (numeric accumulator support)
+;;; ---------------------------------------------------------------------------
+
+(defun %int-literal (s)
+  "S parsed as an integer literal, or NIL."
+  (and s (handler-case (parse-integer s) (error () nil))))
+
+(defun %cv-suffix-p (s)
+  "True when S ends in .CV or .ET -- IEC access to a timer/counter's current
+value (\"C1.CV\", \"T1.ET\").  %IX0.0-style bit addresses don't match."
+  (let ((dot (position #\. s :from-end t)))
+    (and dot (member (string-upcase (subseq s (1+ dot))) '("CV" "ET")
+                     :test #'string=))))
+
+(defun %word-address-p (s)
+  "True for IEC word-size direct addresses: %MW0, %IW2, %QW1 (size letter W)."
+  (and (> (length s) 3)
+       (char= (char s 0) #\%)
+       (member (char-upcase (char s 1)) '(#\M #\I #\Q))
+       (char= (char-upcase (char s 2)) #\W)))
+
+(defun %numeric-load-p (s)
+  "Should LD of S start a NUMERIC accumulator?  Literals, .CV/.ET access and
+word-size addresses are unambiguously numeric; anything else loads a contact."
+  (and s
+       (or (%int-literal s) (%cv-suffix-p s) (%word-address-p s))
+       t))
+
+(defun %value-operand (s)
+  "Classify S in a VALUE position (arith/cmp operand, MOVE source): a literal
+or a word reference.  Plain names are words here -- the position demands a
+number, so there is no ambiguity with contacts."
+  (let ((n (%int-literal s)))
+    (if n (list :lit n) (list :word s))))
+
+(defun %as-value (acc op-name)
+  "Coerce the accumulator ACC to a value expression for OP-NAME.  A lone
+normally-open contact leaf re-reads as a word (LD X / ADD 1 means word X);
+boolean structure cannot."
+  (cond ((value-expr-p acc) acc)
+        ((and (contactp acc) (eq (contact-mode acc) :no))
+         (list :word (contact-operand acc)))
+        (t (error "~A needs a numeric accumulator, got ~S" op-name acc))))
+
+;;; ---------------------------------------------------------------------------
 ;;; The fold: ops -> list of rung trees   (the heart of IL -> LD)
 ;;; ---------------------------------------------------------------------------
 
 (defun fold-ops (ops)
-  "Fold a flat op list into a list of rung trees (each a :COIL node).
+  "Fold a flat op list into a list of rung trees (:COIL or :ASSIGN nodes).
 
-Maintains the IL accumulator ACC and a PAREN stack for A( / O( blocks.  A
+Maintains the IL accumulator ACC -- boolean tree or numeric value expression,
+IL's polymorphic current result -- and a PAREN stack for A( / O( blocks.  A
 store (ST/S/R) emits a rung; the accumulator persists afterward, matching the
-PLC RLO semantics where a fresh LD is what restarts a rung."
+PLC RLO semantics where a fresh LD is what restarts a rung.  Numeric stores
+emit :ASSIGN rungs that execute unconditionally each scan (IEC semantics;
+conditional stores would need JMP)."
   (let ((acc nil) (paren '()) (rungs '()))
     (flet ((emit (kind operand &optional preset (expr acc))
              ;; PRESET (timers/counters only) rides along as a 5th element so
              ;; plain coils keep their original 4-element shape.
+             (%check-boolean expr (format nil "Storing to ~A" operand))
              (push (if preset
                        (list :coil kind operand expr preset)
                        (list :coil kind operand expr))
-                   rungs)))
+                   rungs))
+           (emit-assign (dst value)
+             (when (%int-literal dst)
+               (error "Cannot store to the literal ~A" dst))
+             (push (list :assign dst value) rungs)))
       (dolist (op ops (nreverse rungs))
         (destructuring-bind (m &optional operand preset) op
           (ecase m
             (:network  (setf acc nil paren '())) ; defensive boundary reset
-            (:ld   (setf acc (contact operand :no)))
+            (:ld   (setf acc (if (%numeric-load-p operand)
+                                 (%value-operand operand)
+                                 (contact operand :no))))
             (:ldn  (setf acc (contact operand :nc)))
             (:and  (setf acc (series acc (contact operand :no))))
             (:andn (setf acc (series acc (contact operand :nc))))
             (:or   (setf acc (parallel acc (contact operand :no))))
             (:orn  (setf acc (parallel acc (contact operand :nc))))
+            (:not  (setf acc (negate acc)))
             ;; A(/O( open a deferred sub-expression.  Per IEC IL an operand may
             ;; ride along ("OR( B" starts the block already holding B); without
             ;; one the block starts empty and the next LD seeds it.
@@ -241,7 +326,30 @@ PLC RLO semantics where a fresh LD is what restarts a rung."
                (setf acc (if (eq comb :and)
                              (series saved acc)
                              (parallel saved acc)))))
-            (:st  (emit :normal operand))
+            ;; numeric accumulator: arithmetic left-folds (same op flattens);
+            ;; a comparison consumes it and leaves a BOOLEAN result, so
+            ;; numeric state can gate coils like a contact
+            ((:add :sub :mul :div)
+             (let ((a (%as-value acc (symbol-name m)))
+                   (b (%value-operand operand)))
+               (setf acc (if (and (eq (node-op a) :arith) (eq (second a) m))
+                             (append a (list b))
+                             (list :arith m a b)))))
+            ((:gt :ge :eq :ne :le :lt)
+             (setf acc (list :cmp m
+                             (%as-value acc (symbol-name m))
+                             (%value-operand operand))))
+            (:move                      ; sugar: LD operand / ST preset(=dst)
+             (setf acc (%value-operand operand))
+             (emit-assign preset acc))
+            (:st  (cond ((value-expr-p acc)
+                         (emit-assign operand acc))
+                        ;; a word-size destination demands a value: coerce a
+                        ;; lone contact leaf (LD A / ST %MW0 copies word A)
+                        ((or (%word-address-p operand) (%cv-suffix-p operand))
+                         (emit-assign operand
+                                      (%as-value acc (format nil "ST ~A" operand))))
+                        (t (emit :normal operand))))
             (:stn (emit :normal operand nil (negate acc)))
             (:s   (emit :set   operand))
             (:r   (emit :reset operand))
@@ -267,12 +375,35 @@ PLC RLO semantics where a fresh LD is what restarts a rung."
 ;;; test: parse -> tree -> print -> parse should reach a fixed point.
 ;;; ---------------------------------------------------------------------------
 
+(defun %value-string (v)
+  "The IL operand spelling of a LEAF value expression."
+  (ecase (car v)
+    (:lit (princ-to-string (second v)))
+    (:word (second v))
+    (:arith (error "Cannot linearize the nested right-argument ~S to flat IL ~
+                    (the fold is left-associative, so this tree did not come ~
+                    from PARSE-IL)" v))))
+
+(defun %il-load-value (v)
+  "Ops that load value expression V into a fresh numeric accumulator."
+  (ecase (car v)
+    ((:lit :word) (list (list :ld (%value-string v))))
+    (:arith
+     (destructuring-bind (op . args) (cdr v)
+       (append (%il-load-value (first args))
+               (loop for a in (rest args)
+                     collect (list op (%value-string a))))))))
+
 (defun %il-load (expr)
   "Ops (as (mnemonic operand) lists) that LOAD EXPR onto a fresh accumulator."
   (ecase (node-op expr)
     (:contact
      (list (list (if (eq (contact-mode expr) :nc) :ldn :ld)
                  (contact-operand expr))))
+    (:cmp
+     (destructuring-bind (op a b) (node-args expr)
+       (append (%il-load-value a)
+               (list (list op (%value-string b))))))
     (:not (append (%il-load (second expr)) (list (list :not nil))))
     ((:and :or)
      (let ((parts (node-args expr))
@@ -299,34 +430,47 @@ PLC RLO semantics where a fresh LD is what restarts a rung."
     (:ld "LD") (:ldn "LDN") (:and "AND") (:andn "ANDN")
     (:or "OR") (:orn "ORN") (:and-open "AND(") (:or-open "OR(")
     (:close ")") (:st "ST") (:s "S") (:r "R") (:not "NOT")
-    (:ton "TON") (:tof "TOF") (:tp "TP") (:ctu "CTU") (:ctd "CTD")))
+    (:ton "TON") (:tof "TOF") (:tp "TP") (:ctu "CTU") (:ctd "CTD")
+    (:add "ADD") (:sub "SUB") (:mul "MUL") (:div "DIV")
+    (:gt "GT") (:ge "GE") (:eq "EQ") (:ne "NE") (:le "LE") (:lt "LT")))
 
-(defun rung->il (rung &key (stream nil))
-  "Return (or print to STREAM) the IL text for one RUNG (:COIL node)."
+(defun %op-lines (ops)
+  "Format (mnemonic operand) op lists as IL source lines."
+  (mapcar (lambda (op)
+            (destructuring-bind (m operand) op
+              (if operand
+                  (format nil "~A ~A" (%mnemonic-string m) operand)
+                  (%mnemonic-string m))))
+          ops))
+
+(defun %coil-lines (rung)
   (destructuring-bind (tag kind operand expr &optional preset) rung
     (declare (ignore tag))
-    (let* ((load-ops (%il-load expr))
-           (store-line
-             (if preset
-                 (format nil "~A ~A, ~A" (%mnemonic-string kind) operand
-                         (if (timer-kind-p kind)
-                             (format-time-literal preset)
-                             preset))
-                 (format nil "~A ~A"
-                         (%mnemonic-string
-                          (ecase kind (:normal :st) (:set :s) (:reset :r)))
-                         operand)))
-           (lines (append (mapcar (lambda (op)
-                                    (destructuring-bind (m operand) op
-                                      (if operand
-                                          (format nil "~A ~A"
-                                                  (%mnemonic-string m) operand)
-                                          (%mnemonic-string m))))
-                                  load-ops)
-                          (list store-line))))
-      (if stream
-          (dolist (l lines) (write-line l stream))
-          (format nil "~{~A~%~}" lines)))))
+    (append
+     (%op-lines (%il-load expr))
+     (list (if preset
+               (format nil "~A ~A, ~A" (%mnemonic-string kind) operand
+                       (if (timer-kind-p kind)
+                           (format-time-literal preset)
+                           preset))
+               (format nil "~A ~A"
+                       (%mnemonic-string
+                        (ecase kind (:normal :st) (:set :s) (:reset :r)))
+                       operand))))))
+
+(defun %assign-lines (rung)
+  (destructuring-bind (dst v) (rest rung)
+    (append (%op-lines (%il-load-value v))
+            (list (format nil "ST ~A" dst)))))
+
+(defun rung->il (rung &key (stream nil))
+  "Return (or print to STREAM) the IL text for one RUNG (:COIL or :ASSIGN)."
+  (let ((lines (ecase (first rung)
+                 (:coil (%coil-lines rung))
+                 (:assign (%assign-lines rung)))))
+    (if stream
+        (dolist (l lines) (write-line l stream))
+        (format nil "~{~A~%~}" lines))))
 
 (defun program->il (program &key (stream nil))
   "Return (or print) IL text for a whole PROGRAM, networks separated."

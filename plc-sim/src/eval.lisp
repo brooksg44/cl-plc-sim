@@ -50,6 +50,34 @@
 ;;; Evaluation
 ;;; ---------------------------------------------------------------------------
 
+(defun %word-key (name)
+  "Memory key for a :WORD reference: a .CV/.ET suffix is IEC access to a
+timer/counter's current value, which lives under the bare instance name
+(\"C1.CV\" -> word \"C1\").  %CANON handles the % prefix and case."
+  (let ((dot (position #\. name :from-end t)))
+    (if (and dot (member (string-upcase (subseq name (1+ dot))) '("CV" "ET")
+                         :test #'string=))
+        (subseq name 0 dot)
+        name)))
+
+(defun eval-value (v memory)
+  "Evaluate value expression V against MEMORY, returning an integer.
+DIV truncates; dividing by zero yields 0 (a real PLC would raise a fault --
+the sim shrugs and keeps scanning)."
+  (ecase (car v)
+    (:lit  (second v))
+    (:word (mem-word memory (%word-key (second v))))
+    (:arith
+     (destructuring-bind (op first . rest) (cdr v)
+       (let ((x (eval-value first memory)))
+         (dolist (a rest x)
+           (let ((y (eval-value a memory)))
+             (setf x (ecase op
+                       (:add (+ x y))
+                       (:sub (- x y))
+                       (:mul (* x y))
+                       (:div (if (zerop y) 0 (truncate x y))))))))))))
+
 (defun eval-expr (expr memory)
   "Evaluate an IR boolean expression EXPR against MEMORY, returning T or NIL.
 An empty (NIL) expression evaluates to T (a closed power rail)."
@@ -63,24 +91,38 @@ An empty (NIL) expression evaluates to T (a closed power rail)."
        (:and (every (lambda (e) (eval-expr e memory)) (node-args expr)))
        (:or  (some  (lambda (e) (eval-expr e memory)) (node-args expr)))
        (:not (not (eval-expr (second expr) memory)))
+       (:cmp
+        (destructuring-bind (op a b) (node-args expr)
+          (let ((x (eval-value a memory))
+                (y (eval-value b memory)))
+            (and (ecase op
+                   (:gt (> x y)) (:ge (>= x y)) (:eq (= x y))
+                   (:ne (/= x y)) (:le (<= x y)) (:lt (< x y)))
+                 t))))
        (:fb  (error "FB evaluation not implemented for ~S" expr))))
     (t (error "Not an IR expression: ~S" expr))))
 
 (defun execute-rung (rung memory)
-  "Evaluate RUNG and apply its coil to MEMORY.  Returns the rung's result."
-  (destructuring-bind (tag kind operand expr &optional preset) rung
-    (declare (ignore tag))
-    (let ((result (eval-expr expr memory)))
-      (ecase kind
-        (:normal (setf (mem-bit memory operand) result))
-        (:set    (when result (setf (mem-bit memory operand) t)))
-        (:reset  (when result (%reset-operand memory operand)))
-        (:ton (%eval-ton memory operand preset result))
-        (:tof (%eval-tof memory operand preset result))
-        (:tp  (%eval-tp  memory operand preset result))
-        (:ctu (%eval-ctu memory operand preset result))
-        (:ctd (%eval-ctd memory operand preset result)))
-      result)))
+  "Execute RUNG against MEMORY: evaluate a :COIL rung and apply its coil, or
+perform an :ASSIGN rung's store (unconditionally -- IEC numeric semantics).
+Returns the rung's result (the boolean RLO, or the stored value)."
+  (ecase (first rung)
+    (:assign
+     (destructuring-bind (dst v) (rest rung)
+       (setf (mem-word memory (%word-key dst)) (eval-value v memory))))
+    (:coil
+     (destructuring-bind (kind operand expr &optional preset) (rest rung)
+       (let ((result (eval-expr expr memory)))
+         (ecase kind
+           (:normal (setf (mem-bit memory operand) result))
+           (:set    (when result (setf (mem-bit memory operand) t)))
+           (:reset  (when result (%reset-operand memory operand)))
+           (:ton (%eval-ton memory operand preset result))
+           (:tof (%eval-tof memory operand preset result))
+           (:tp  (%eval-tp  memory operand preset result))
+           (:ctu (%eval-ctu memory operand preset result))
+           (:ctd (%eval-ctd memory operand preset result)))
+         result)))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Timers and counters

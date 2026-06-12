@@ -14,6 +14,7 @@
    #:contact #:series #:parallel #:negate
    #:contactp #:contact-mode #:contact-operand
    #:node-op #:node-args #:timer-kind-p
+   #:value-expr-p #:value-op-label #:format-value-expr #:format-cmp-expr
    ;; --- Parser (parser.lisp) -------------------------------------------
    #:parse-il #:parse-il-string #:fold-ops #:tokenize
    #:format-time-literal #:format-duration
@@ -21,7 +22,7 @@
    #:rung->il #:program->il
    ;; --- Memory model + evaluator (eval.lisp) ---------------------------
    #:make-memory #:memory #:mem-bit #:mem-word
-   #:eval-expr #:execute-rung #:scan
+   #:eval-expr #:eval-value #:execute-rung #:scan
    #:make-sim #:sim #:sim-memory #:sim-program #:sim-running-p #:sim-scan-count
    #:sim-next-rung #:sim-clock-ms #:sim-scan-period-ms #:sim-time-fn
    #:wall-time-ms #:sim-start-realtime #:sim-stop-realtime

@@ -44,6 +44,7 @@ examples/
   pump-on-delay.il     Timers: TON delayed pump start + TOF cooling-fan run-on
   batch-counter.il     Counters: CTU part counter + CTD remaining-capacity, batch reset
   stamp-press.il       One-shot: TP fires a fixed 2 s stamp pulse on a part's rising edge
+  parts-remaining.il   Numeric ops: remaining := 3 - C1.CV, GE comparison gates a lamp
 docs/                  Rendered ladder images for the README (regen: make-docs.lisp)
 ```
 
@@ -85,12 +86,13 @@ only appears on the scan where the fault first asserts.
 | IR, IL parser, fold, pretty-printer | ✅ implemented, tested |
 | Memory model, evaluator, scan cycle | ✅ implemented, tested |
 | Timers & counters (TON/TOF/TP, CTU/CTD) | ✅ implemented, tested (realtime ms; frozen virtual clock when stepping) |
+| Numeric ops (ADD/SUB/MUL/DIV, GT…LT, MOVE) | ✅ implemented, tested (IEC accumulator; stores unconditional) |
 | Threaded free-run mode (GUI Run/Stop) | ✅ implemented; scan thread follows the wall clock |
 | Layout engine + SVG renderer | ✅ implemented, tested |
 | Round-trip (IL → tree → IL → tree) | ✅ fixed-point verified |
 | McCLIM GUI | ✅ compiles & loads against McCLIM; a live window needs a display (XQuartz) |
 
-**135/135 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
+**170/170 FiveAM checks pass; the `verify.lisp` smoke test passes; `plc-sim-clim`
 compiles and loads against McCLIM.** The GUI window itself was not *displayed*
 here because this machine has no X11 backend (XQuartz not installed, `DISPLAY`
 unset) — see "Launch the McCLIM GUI" below.
@@ -219,6 +221,10 @@ Both Siemens STL and IEC textual mnemonics are accepted:
 | Set / Reset   | `S` / `R`, `SET` / `RESET` |
 | Timers        | `TON` (on-delay), `TOF` (off-delay), `TP` (pulse) — `TON T1, T#5s` (TIME literal, or a bare integer = milliseconds) |
 | Counters      | `CTU` (count up), `CTD` (count down) — `CTU C1, 3` |
+| Arithmetic    | `ADD`, `SUB`, `MUL`, `DIV` (numeric accumulator; `DIV` truncates, ÷0 → 0) |
+| Comparison    | `GT`, `GE`, `EQ`, `NE`, `LE`, `LT` — numeric accumulator vs operand, result is boolean |
+| Move          | `MOVE src, dst` (sugar for `LD src` / `ST dst`) |
+| Negate result | `NOT` (invert the boolean accumulator) |
 
 Comments: `//…` and `;…` to end of line. Networks split on `NETWORK` markers or
 `label:` lines (and each store ends a rung).
@@ -267,14 +273,54 @@ Both example programs rendered mid-story (green = energized; boxes show
 | ![pump on-delay running](docs/pump-on-delay-running.png) | ![batch counter complete](docs/batch-counter-complete.png) |
 | Start latched `%MX0.0`; `T1` reads 5s/5s so the pump runs, and the `TOF` follows the pump, holding the fan. Press Stop and keep going: the pump drops at once, the fan runs 8 more seconds. | Three sensor pulses counted: the `CTU` reads 3/3 (done) while the mirror-image `CTD` reads 0/3 (done). The reset button clears `C1` to 0 and reloads `C2` to 3. |
 
+### Numeric operations
+
+IL's accumulator is polymorphic: `LD` of an integer literal, a word-size
+address (`%MW0`, `%IW2`, `%QW1`) or a timer/counter value (`C1.CV`, `T1.ET`)
+makes it **numeric**; `ADD`/`SUB`/`MUL`/`DIV` fold into it left-to-right; `ST`
+of a numeric accumulator writes a word. A comparison (`GT`/`GE`/`EQ`/`NE`/
+`LE`/`LT`) consumes the numeric accumulator and leaves a **boolean**, so
+numeric state gates coils exactly like a contact — in the ladder it renders
+as a contact-sized compare element, green while true.
+
+```il
+LD   3            // numeric accumulator
+SUB  C1.CV        // remaining := 3 - count
+ST   %MW0
+
+LD   C1.CV
+GE   2
+ST   %QX0.2       // almost-full lamp
+```
+
+**Numeric stores run unconditionally, every scan** — faithful IEC IL
+semantics. There is no EN contact network in front of a store box (it hangs
+straight off the rail), because conditionally *skipping* instructions is the
+job of `JMP`/`JMPC`/`JMPCN`, which this simulator doesn't implement yet. Use
+a comparison feeding a coil when you need numeric state to drive logic.
+
+`MOVE src, dst` is accepted as sugar for `LD src` / `ST dst` (the
+pretty-printer canonicalizes it back to `LD`/`ST`). In the GUI, the `Set`
+command pokes word values from the interactor — `Set %MW0 42` — the numeric
+counterpart of clicking/`Toggle` for bits.
+
+![parts remaining](docs/parts-remaining.png)
+
+`examples/parts-remaining.il` after two parts: the `SUB` box recomputes
+`3-C1.CV=1` every scan, and the `C1.CV>=2` compare element is green, lighting
+the almost-full lamp while the gate (driven by `C1`'s *done bit*) stays shut.
+
 ## Limitations & next steps (in priority order)
 
 1. ~~**Timers / counters** (`TON`, `TOF`, `TP`, `CTU`, `CTD`)~~ — **done**; see
    "Timers and counters" above. The time base is real milliseconds, wall-clock
    in free-run mode (item 6) and frozen virtual time when stepping.
-2. **Function blocks & non-boolean ops** (`L`/`T`, `ADD`, `CAL`, `JMP`) — the IR
-   reserves a `(:fb …)` node and the layout/SVG already draw a box for it; the
-   evaluator currently errors on `:fb` (intentional TODO).
+2. ~~**Non-boolean ops** (`ADD`, comparisons, `MOVE`)~~ — **done**; see
+   "Numeric operations" above. Still open from this family: **`CAL`** (FB
+   instances with named parameters — the IR's `(:fb …)` node stays reserved
+   for it, and the evaluator still intentionally errors on it) and
+   **`JMP`/`JMPC`/`JMPCN`** (labels + conditional skips, which is also what
+   conditional numeric stores need).
 3. **Real addressing** — memory is a name→value hash table, which is accurate
    enough for boolean ladder. Swap in bit/byte arrays with offset arithmetic
    (`%MW10`, `%DB1.DBD4`) when you need word/overlapping addressing.

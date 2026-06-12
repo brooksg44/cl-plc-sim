@@ -14,6 +14,16 @@
 
 (defun %px (grid) (+ *margin* (* grid *cell*)))
 
+(defun %xml-escape (s)
+  "Escape <, > and & for SVG text content (comparison labels contain them)."
+  (with-output-to-string (out)
+    (loop for c across s
+          do (case c
+               (#\< (write-string "&lt;" out))
+               (#\> (write-string "&gt;" out))
+               (#\& (write-string "&amp;" out))
+               (t (write-char c out))))))
+
 (defun %energized-contact-p (mode operand memory)
   (and memory
        (let ((v (mem-bit memory operand)))
@@ -86,6 +96,44 @@ fits because the extent math already pads a spare cell past every coil."
     (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='11' font-family='monospace'>~A ~A</text>~%"
             (+ cx (/ *cell* 2)) (- cy 18) operand label)))
 
+(defun %svg-cmp (out x y op a b memory)
+  "A comparison element: a contact-sized box showing e.g. C1.CV>=2, green
+while the comparison currently holds."
+  (let* ((cx (%px x)) (cy (%px y))
+         (live (and memory (eval-expr (list :cmp op a b) memory)))
+         (color (if live "#1a7f37" "#444"))
+         (x0 (+ cx 5)) (x1 (+ cx (* 2 *cell*) -5)))
+    (format out "  <line x1='~D' y1='~D' x2='~D' y2='~D' stroke='~A' stroke-width='2'/>~%"
+            cx cy x0 cy color)
+    (format out "  <line x1='~D' y1='~D' x2='~D' y2='~D' stroke='~A' stroke-width='2'/>~%"
+            x1 cy (+ cx (* 2 *cell*)) cy color)
+    (format out "  <rect x='~D' y='~D' width='~D' height='~D' fill='white' stroke='~A' stroke-width='2'/>~%"
+            x0 (- cy 12) (- x1 x0) 24 color)
+    (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
+            (+ cx *cell*) (+ cy 4)
+            (%xml-escape (format-cmp-expr (list :cmp op a b))))))
+
+(defun %svg-assign (out x y w dst v memory)
+  "An unconditional numeric store box (its EN is the rail): the op label on
+top, the value expression -- with its live value when MEMORY is supplied --
+below, and the destination above the box like an instance name."
+  (let* ((cx (%px x)) (cy (%px y))
+         (color "#444")
+         (x0 (+ cx 5)) (x1 (+ cx (* w *cell*) -5))
+         (mid (+ cx (/ (* w *cell*) 2))))
+    (format out "  <rect x='~D' y='~D' width='~D' height='~D' fill='white' stroke='~A' stroke-width='2'/>~%"
+            x0 (- cy 18) (- x1 x0) 36 color)
+    (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
+            mid (- cy 5) (value-op-label v))
+    (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='10' font-family='monospace'>~A</text>~%"
+            mid (+ cy 12)
+            (%xml-escape (if memory
+                             (format nil "~A=~D" (format-value-expr v)
+                                     (eval-value v memory))
+                             (format-value-expr v))))
+    (format out "  <text x='~D' y='~D' text-anchor='middle' font-size='11' font-family='monospace'>~A</text>~%"
+            mid (- cy 22) dst)))
+
 (defun %svg-wire (out x1 y1 x2 y2)
   (format out "  <line x1='~D' y1='~D' x2='~D' y2='~D' stroke='#444' stroke-width='2'/>~%"
           (%px x1) (%px y1) (%px x2) (%px y2)))
@@ -102,9 +150,9 @@ energized elements are drawn in green."
   (multiple-value-bind (prims rows) (layout-program program)
     (let* ((max-x (loop for p in prims maximize
                         (ecase (first p)
-                          ((:contact :coil) (+ 2 (second p)))
+                          ((:contact :coil :cmp) (+ 2 (second p)))
                           (:wire (max (second p) (fourth p)))
-                          (:fb (+ (second p) (fourth p))))))
+                          ((:fb :assign) (+ (second p) (fourth p))))))
            (width (+ (* 2 *margin*) (* (+ max-x 1) *cell*)))
            (height (+ (* 2 *margin*) (* (max rows 1) *cell*))))
       (format stream "<svg xmlns='http://www.w3.org/2000/svg' width='~D' height='~D'>~%"
@@ -116,6 +164,10 @@ energized elements are drawn in green."
                       (%svg-contact stream x y mode op memory)))
           (:coil (destructuring-bind (x y kind op &optional preset) (rest p)
                    (%svg-coil stream x y kind op memory preset)))
+          (:cmp (destructuring-bind (x y op a b) (rest p)
+                  (%svg-cmp stream x y op a b memory)))
+          (:assign (destructuring-bind (x y w dst v) (rest p)
+                     (%svg-assign stream x y w dst v memory)))
           (:wire (apply #'%svg-wire stream (rest p)))
           (:fb (apply #'%svg-fb stream (rest p)))))
       (format stream "</svg>~%"))))
