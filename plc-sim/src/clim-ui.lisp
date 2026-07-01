@@ -41,6 +41,10 @@ rather than shrinking labels into each other.")
            :incremental-redisplay t
            :scroll-bars t
            :text-style (make-text-style :sans-serif :roman 12))
+   (il :application
+       :display-function 'display-il
+       :scroll-bars t
+       :text-style (make-text-style :fix :roman 12))
    (io :application
        :display-function 'display-io
        :scroll-bars t
@@ -53,7 +57,8 @@ rather than shrinking labels into each other.")
    (default
     (vertically ()
       (horizontally ()
-        (4/5 (labelling (:label "Ladder") ladder))
+        (3/5 (labelling (:label "Ladder") ladder))
+        (1/5 (labelling (:label "IL")     il))
         (1/5 (labelling (:label "I/O")    io)))
       (labelling (:label "Commands") interactor)))))
 
@@ -235,6 +240,26 @@ value expression with its live value below, the destination above the box."
                 mid (+ cy qh -4)
                 :align-x :center :text-size (lbl-size) :ink ink)
     (draw-text* pane dst x0 (- cy qh 6) :text-size (lbl-size))))
+
+;;; ---------------------------------------------------------------------------
+;;; The IL panel: the loaded program as IL source
+;;; ---------------------------------------------------------------------------
+
+(defun display-il (frame pane)
+  "The loaded program as IL text, printed per rung (same output as
+PROGRAM->IL) so the network whose rung executes next can be drawn in the
+step marker's orange while a scan is mid-flight."
+  (let* ((sim (frame-sim frame))
+         (program (plc-sim:sim-program sim))
+         (next (plc-sim:sim-next-rung sim))
+         (stepping (plusp next)))
+    (loop for rung in program
+          for i from 0
+          do (with-drawing-options
+                 (pane :ink (if (and stepping (= i next)) +orange-red+ +black+))
+               (format pane "NETWORK ~D~%" (1+ i))
+               (plc-sim:rung->il rung :stream pane)
+               (terpri pane)))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; The I/O panel: every known bit, clickable to toggle
