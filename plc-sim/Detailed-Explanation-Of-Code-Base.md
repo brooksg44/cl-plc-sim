@@ -526,6 +526,9 @@ reaches the same IR again.
 
 That is called a round-trip test.
 
+The same printer also feeds the GUI's IL pane, which displays the loaded
+program as IL text.
+
 ## Memory Model
 
 The file `src/eval.lisp` defines the simulator's memory.
@@ -1007,11 +1010,17 @@ The application frame is defined with:
 The frame contains:
 
 - A ladder pane.
+- An IL pane showing the loaded program as IL source text.
 - An I/O pane.
 - An interactor command pane.
 
 The GUI draws the same primitives produced by `layout-program`. This is why the
 SVG and GUI views stay consistent.
+
+The IL pane prints the program rung by rung with `rung->il`, producing the
+same text as `program->il`. Printing per rung lets it highlight the network
+whose rung executes next in orange while a scan is mid-flight, matching the
+step marker arrowhead in the ladder pane.
 
 ### Clickable Operands
 
